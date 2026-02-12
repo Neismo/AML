@@ -298,7 +298,6 @@ if __name__ == "__main__":
     # Make a mask that is 1 for the first half of the features anif __name__ == "__main__":
     import torch.utils.data
     from torchvision import transforms
-    from torchvision.utils import save_image
     import ToyData
 
     # Parse arguments
