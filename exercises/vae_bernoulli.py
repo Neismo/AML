@@ -243,7 +243,7 @@ if __name__ == "__main__":
     # Parse arguments
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('mode', type=str, default='train', choices=['train', 'sample', 'evaluate', 'plot_pca'], help='what to do when running the script (default: %(default)s)')
+    parser.add_argument('mode', type=str, default='train', choices=['train', 'sample', 'evaluate', 'plot_pca', 'plot_prior'], help='what to do when running the script (default: %(default)s)')
     parser.add_argument('--model', type=str, default='model.pt', help='file to save model to or load model from (default: %(default)s)')
     parser.add_argument('--samples', type=str, default='samples.png', help='file to save samples in (default: %(default)s)')
     parser.add_argument('--device', type=str, default='cpu', choices=['cpu', 'cuda', 'mps'], help='torch device (default: %(default)s)')
@@ -343,6 +343,29 @@ if __name__ == "__main__":
         elbo /= len(mnist_test_loader)
         print(f"ELBO: {elbo:.4f}")
     
+    elif args.mode == "plot_prior":
+        import matplotlib.pyplot as plt
+        model.eval()
+        with torch.no_grad():
+            # 1. Sample from prior
+            if isinstance(model.prior, Flow):
+                z = model.prior.sample(sample_shape=(5000,))
+            else:
+                z = model.prior().sample(torch.Size([5000]))
+            z = z.cpu().numpy()
+
+        # 2. Project to 2D if M > 2
+        if z.shape[1] > 2:
+            from sklearn.decomposition import PCA
+            z = PCA(n_components=2).fit_transform(z)
+
+        # 3. Plot
+        plt.figure(figsize=(6, 6))
+        plt.scatter(z[:, 0], z[:, 1], alpha=0.5, s=2, c='royalblue')
+        plt.title(f"Prior Distribution Latent Space ({type(model.prior).__name__})")
+        plt.axis('equal')
+        plt.show()
+
     elif args.mode == "plot_pca":
         from sklearn.decomposition import PCA
         import matplotlib.pyplot as plt
