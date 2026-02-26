@@ -4,6 +4,9 @@
 # - https://github.com/jmtomczak/intro_dgm/blob/main/vaes/vae_example.ipynb
 # - https://github.com/kampta/pytorch-distributions/blob/master/gaussian_vae.py
 
+from flow import MaskedCouplingLayer
+from flow import Flow
+
 import torch
 import torch.nn as nn
 import torch.distributions as td
@@ -123,7 +126,12 @@ class VAE(nn.Module):
     """
     Define a Variational Autoencoder (VAE) model.
     """
-    def __init__(self, prior, decoder, encoder):
+    def __init__(
+            self, 
+            prior: GaussianPrior | MixtureGaussianPrior | Flow, 
+            decoder: BernoulliDecoder,
+            encoder: GaussianEncoder
+        ):
         """
         Parameters:
         prior: [torch.nn.Module] 
@@ -153,13 +161,19 @@ class VAE(nn.Module):
         z = q.rsample()
 
         recon = self.decoder(z).log_prob(x)
-        prior_dist = self.prior()
-        try:
-            kl = td.kl_divergence(q, prior_dist)
-        except NotImplementedError:
-            kl = q.log_prob(z) - prior_dist.log_prob(z)
 
-        elbo = torch.mean(recon - kl, dim=0)
+        if isinstance(self.prior, Flow):
+            log_p_z = self.prior.log_prob(z)
+            log_q_z = q.log_prob(z)
+            elbo = torch.mean(recon + log_p_z - log_q_z, dim=0)
+        else:
+            prior_dist = self.prior()
+            try:
+                kl = td.kl_divergence(q, prior_dist)
+            except NotImplementedError:
+                kl = q.log_prob(z) - prior_dist.log_prob(z)
+
+            elbo = torch.mean(recon - kl, dim=0)
         return elbo
 
     def sample(self, n_samples=1):
@@ -170,7 +184,10 @@ class VAE(nn.Module):
         n_samples: [int]
            Number of samples to generate.
         """
-        z = self.prior().sample(torch.Size([n_samples]))
+        if isinstance(self.prior, Flow):
+            z = self.prior.sample(sample_shape=(n_samples,))
+        else:
+            z = self.prior().sample(torch.Size([n_samples]))
         return self.decoder(z).sample()
     
     def forward(self, x):
@@ -221,8 +238,7 @@ def train(model, optimizer, data_loader, epochs, device):
 
 if __name__ == "__main__":
     from torchvision import datasets, transforms
-    from torchvision.utils import save_image, make_grid
-    import glob
+    from torchvision.utils import save_image
 
     # Parse arguments
     import argparse
@@ -234,7 +250,7 @@ if __name__ == "__main__":
     parser.add_argument('--batch-size', type=int, default=32, metavar='N', help='batch size for training (default: %(default)s)')
     parser.add_argument('--epochs', type=int, default=10, metavar='N', help='number of epochs to train (default: %(default)s)')
     parser.add_argument('--latent-dim', type=int, default=32, metavar='N', help='dimension of latent variable (default: %(default)s)')
-    parser.add_argument('--prior', type=str, default='gaussian', choices=['gaussian', 'mog'], help='prior type (default: %(default)s)')
+    parser.add_argument('--prior', type=str, default='gaussian', choices=['gaussian', 'mog', 'flow'], help='prior type (default: %(default)s)')
     parser.add_argument('--mog-components', type=int, default=10, metavar='K', help='number of MoG components (default: %(default)s)')
 
     args = parser.parse_args()
@@ -257,6 +273,16 @@ if __name__ == "__main__":
     M = args.latent_dim
     if args.prior == 'mog':
         prior = MixtureGaussianPrior(M, args.mog_components)
+    elif args.prior == 'flow':
+        transformations=[]
+        mask = torch.arange(M) % 2
+        for i in range(4):
+            mask = (1-mask) # Flip the mask
+            scale_net = nn.Sequential(nn.Linear(M, 8), nn.ReLU(), nn.Linear(8, M), nn.Tanh())
+            translation_net = nn.Sequential(nn.Linear(M, 8), nn.ReLU(), nn.Linear(8, M))
+            transformations.append(MaskedCouplingLayer(scale_net, translation_net, mask))
+        base = GaussianPrior(M)
+        prior = Flow(base, transformations)
     else:
         prior = GaussianPrior(M)
 
