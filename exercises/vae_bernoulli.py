@@ -62,7 +62,7 @@ def plot_prior_vs_posterior(model, test_loader, device, save_path):
         prior_2d = prior_z
 
     # 4. Plotting the Overlap
-    plt.figure(figsize=(8, 8))
+    plt.figure(figsize=(3, 3))
     
     # Plot Prior first (background)
     plt.scatter(prior_2d[:, 0], prior_2d[:, 1], 
@@ -70,9 +70,9 @@ def plot_prior_vs_posterior(model, test_loader, device, save_path):
     
     # Plot Posterior second (foreground)
     plt.scatter(posterior_2d[:, 0], posterior_2d[:, 1], 
-                alpha=0.5, s=3, label='Aggregated Posterior $q(z)$', c='crimson')
+                alpha=0.5, s=3, label='Agg. Post. $q(z)$', c='crimson')
 
-    plt.title(f"Latent Space Overlap: {type(model.prior).__name__}")
+    plt.title(f"{type(model.prior).__name__}")
     plt.xlabel("PC1")
     plt.ylabel("PC2")
     plt.legend(markerscale=5) # Larger icons in legend for visibility
@@ -230,15 +230,15 @@ class VAE(nn.Module):
 
         recon = self.decoder(z).log_prob(x)
 
-        if isinstance(self.prior, Flow):
+        if isinstance(self.prior, Flow):  # flow
             log_p_z = self.prior.log_prob(z)
             log_q_z = q.log_prob(z)
             elbo = torch.mean(recon + log_p_z - log_q_z, dim=0)
-        else:
+        else:  # gauss or MoG
             prior_dist = self.prior()
-            try:
+            try: # Gaussian
                 kl = td.kl_divergence(q, prior_dist)
-            except NotImplementedError:
+            except NotImplementedError: # MoG
                 kl = q.log_prob(z) - prior_dist.log_prob(z)
 
             elbo = torch.mean(recon - kl, dim=0)
