@@ -198,7 +198,8 @@ class VAE(nn.Module):
             self, 
             prior: GaussianPrior | MixtureGaussianPrior | Flow, 
             decoder: BernoulliDecoder,
-            encoder: GaussianEncoder
+            encoder: GaussianEncoder,
+            beta: float = 1.0,
         ):
         """
         Parameters:
@@ -214,6 +215,7 @@ class VAE(nn.Module):
         self.prior = prior
         self.decoder = decoder
         self.encoder = encoder
+        self.beta = beta
 
     def elbo(self, x):
         """
@@ -233,7 +235,7 @@ class VAE(nn.Module):
         if isinstance(self.prior, Flow):  # flow
             log_p_z = self.prior.log_prob(z)
             log_q_z = q.log_prob(z)
-            elbo = torch.mean(recon + log_p_z - log_q_z, dim=0)
+            elbo = torch.mean(recon + self.beta*(log_p_z - log_q_z), dim=0)
         else:  # gauss or MoG
             prior_dist = self.prior()
             try: # Gaussian
@@ -241,7 +243,7 @@ class VAE(nn.Module):
             except NotImplementedError: # MoG
                 kl = q.log_prob(z) - prior_dist.log_prob(z)
 
-            elbo = torch.mean(recon - kl, dim=0)
+            elbo = torch.mean(recon - self.beta * kl, dim=0)
         return elbo
 
     def sample(self, n_samples=1):
@@ -300,7 +302,7 @@ def train(model, optimizer, data_loader, epochs, device):
             optimizer.step()
 
             # Update progress bar
-            progress_bar.set_postfix(loss=f"⠀{loss.item():12.4f}", epoch=f"{epoch+1}/{epochs}")
+            progress_bar.set_postfix(loss=f"{loss.item():12.4f}", epoch=f"{epoch+1}/{epochs}")
             progress_bar.update()
 
 
@@ -320,6 +322,7 @@ if __name__ == "__main__":
     parser.add_argument('--latent-dim', type=int, default=32, metavar='N', help='dimension of latent variable (default: %(default)s)')
     parser.add_argument('--prior', type=str, default='gaussian', choices=['gaussian', 'mog', 'flow'], help='prior type (default: %(default)s)')
     parser.add_argument('--mog-components', type=int, default=10, metavar='K', help='number of MoG components (default: %(default)s)')
+    parser.add_argument('--beta', type=float, default=1.0, help='beta parameter for ELBO (default: %(default)s)')
 
     args = parser.parse_args()
     print('# Options')
@@ -376,7 +379,7 @@ if __name__ == "__main__":
     # Define VAE model
     decoder = BernoulliDecoder(decoder_net)
     encoder = GaussianEncoder(encoder_net)
-    model = VAE(prior, decoder, encoder).to(device)
+    model = VAE(prior, decoder, encoder, beta=args.beta).to(device)
 
     # Choose mode to run
     if args.mode == 'train':
