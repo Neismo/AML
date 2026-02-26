@@ -4,6 +4,8 @@
 # - https://github.com/jmtomczak/intro_dgm/blob/main/vaes/vae_example.ipynb
 # - https://github.com/kampta/pytorch-distributions/blob/master/gaussian_vae.py
 
+import time
+
 from flow import MaskedCouplingLayer
 from flow import Flow
 import numpy as np
@@ -13,6 +15,7 @@ import torch.distributions as td
 import torch.utils.data
 from torch.nn import functional as F
 from tqdm import tqdm
+from fid import compute_fid
 
 
 def plot_prior_vs_posterior(model, test_loader, device, save_path):
@@ -313,7 +316,7 @@ if __name__ == "__main__":
     # Parse arguments
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('mode', type=str, default='train', choices=['train', 'sample', 'evaluate', 'plot_pca', 'plot_prior', 'plot', 'train_then_eval'], help='what to do when running the script (default: %(default)s)')
+    parser.add_argument('mode', type=str, default='train', choices=['train', 'sample', 'evaluate', 'plot_pca', 'plot_prior', 'plot', 'train_then_eval', 'fid'], help='what to do when running the script (default: %(default)s)')
     parser.add_argument('--model', type=str, default='model.pt', help='file to save model to or load model from (default: %(default)s)')
     parser.add_argument('--samples', type=str, default='samples.png', help='file to save samples in (default: %(default)s)')
     parser.add_argument('--device', type=str, default='cpu', choices=['cpu', 'cuda', 'mps'], help='torch device (default: %(default)s)')
@@ -323,6 +326,7 @@ if __name__ == "__main__":
     parser.add_argument('--prior', type=str, default='gaussian', choices=['gaussian', 'mog', 'flow'], help='prior type (default: %(default)s)')
     parser.add_argument('--mog-components', type=int, default=10, metavar='K', help='number of MoG components (default: %(default)s)')
     parser.add_argument('--beta', type=float, default=1.0, help='beta parameter for ELBO (default: %(default)s)')
+    parser.add_argument('--time', action='store_true', help='whether to time the sampling process (default: %(default)s)')
 
     args = parser.parse_args()
     print('# Options')
@@ -397,10 +401,27 @@ if __name__ == "__main__":
 
         # Generate samples
         model.eval()
-        with torch.no_grad():
-            samples = (model.sample(64)).cpu() 
-            save_image(samples.view(64, 1, 28, 28), args.samples)
 
+        batch_size = args.batch_size
+        num_iterations = 1000
+        total_samples = batch_size * num_iterations
+
+        if args.time:
+            start_time = time.perf_counter()
+            for i in tqdm(range(num_iterations)):
+                with torch.no_grad():
+                    samples = (model.sample(batch_size)).cpu() 
+                    #save_image(samples.view(64, 1, 28, 28), args.samples)
+
+            end_time = time.perf_counter()
+            total_duration = end_time - start_time
+            samples_per_second = total_samples / total_duration
+
+            print(f"Total time for {total_samples} samples: {total_duration:.2f} seconds")
+            print(f"Throughput: {samples_per_second:.2f} samples/second")
+        else:            
+            samples = model.sample(batch_size).cpu() 
+            save_image(samples.view(batch_size, 1, 28, 28), args.samples)
     elif args.mode == "evaluate":
         model.load_state_dict(torch.load(args.model, map_location=torch.device(args.device)))
         model.eval()
@@ -531,3 +552,26 @@ if __name__ == "__main__":
 
     elif args.mode == "plot":
         plot_prior_vs_posterior(model, mnist_test_loader, device, save_path=f"exercises/samples/{type(model.prior).__name__}_prior_vs_posterior.png")
+
+    elif args.mode == "fid":
+        model.load_state_dict(torch.load(args.model, map_location=torch.device(args.device)))
+
+        for i, (x, _) in enumerate(tqdm(mnist_test_loader, desc="Collecting real samples")):
+            if i == 0:
+                x_real = x.to(device)
+            else:
+                x_real = torch.cat([x_real, x.to(device)], dim=0)
+
+        x_gen = []
+        with torch.no_grad():
+            for i in tqdm(range(x_real.shape[0] // 100), desc="Generating samples"):
+                x_gen.append(model.sample(100).cpu())
+
+        x_gen = torch.cat(x_gen, dim=0)
+
+        # Make it in the same format as real samples (N, 1, 28, 28)
+        x_gen = x_gen.view(-1, 1, 28, 28).to(device)
+        x_real = x_real.view(-1, 1, 28, 28).to(device)
+
+        fid = compute_fid(x_real, x_gen, device=device)
+        print(f"FID Score: {fid:.4f}")

@@ -48,7 +48,7 @@ def compute_fid(
     x_real: torch.Tensor,
     x_gen: torch.Tensor,
     device: str = "cpu",
-    classifier_ckpt: str = "mnist_classifier.pth",
+    classifier_ckpt: str = "exercises/models/mnist_classifier.pth",
 ) -> float:
     """Compute the Fréchet Inception Distance (FID) between two sets of images.
     
