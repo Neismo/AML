@@ -263,7 +263,7 @@ if __name__ == "__main__":
             num_hidden = 64
             network = FcNetwork(D, num_hidden)
         else:
-            from unet import Unet
+            from exercises.unet import Unet
             network = Unet()
 
     # Set the number of steps in the diffusion process
