@@ -311,7 +311,7 @@ if __name__ == "__main__":
     # Parse arguments
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('mode', type=str, default='train', choices=['train', 'sample', 'evaluate', 'plot_pca', 'plot_prior', 'plot'], help='what to do when running the script (default: %(default)s)')
+    parser.add_argument('mode', type=str, default='train', choices=['train', 'sample', 'evaluate', 'plot_pca', 'plot_prior', 'plot', 'train_then_eval'], help='what to do when running the script (default: %(default)s)')
     parser.add_argument('--model', type=str, default='model.pt', help='file to save model to or load model from (default: %(default)s)')
     parser.add_argument('--samples', type=str, default='samples.png', help='file to save samples in (default: %(default)s)')
     parser.add_argument('--device', type=str, default='cpu', choices=['cpu', 'cuda', 'mps'], help='torch device (default: %(default)s)')
@@ -411,6 +411,66 @@ if __name__ == "__main__":
         elbo /= len(mnist_test_loader)
         print(f"ELBO: {elbo:.4f}")
     
+    elif args.mode == "train_then_eval":
+        ELBOS = []
+        for i in range(5):
+            # Define prior distribution
+            M = args.latent_dim
+            if args.prior == 'mog':
+                prior = MixtureGaussianPrior(M, args.mog_components)
+            elif args.prior == 'flow':
+                transformations=[]
+                mask = torch.arange(M) % 2
+                for i in range(4):
+                    mask = (1-mask) # Flip the mask
+                    scale_net = nn.Sequential(nn.Linear(M, 8), nn.ReLU(), nn.Linear(8, M), nn.Tanh())
+                    translation_net = nn.Sequential(nn.Linear(M, 8), nn.ReLU(), nn.Linear(8, M))
+                    transformations.append(MaskedCouplingLayer(scale_net, translation_net, mask))
+                base = GaussianPrior(M)
+                prior = Flow(base, transformations)
+            else:
+                prior = GaussianPrior(M)
+
+            # Define encoder and decoder networks
+            encoder_net = nn.Sequential(
+                nn.Flatten(),
+                nn.Linear(784, 512),
+                nn.ReLU(),
+                nn.Linear(512, 512),
+                nn.ReLU(),
+                nn.Linear(512, M*2),
+            )
+
+            decoder_net = nn.Sequential(
+                nn.Linear(M, 512),
+                nn.ReLU(),
+                nn.Linear(512, 512),
+                nn.ReLU(),
+                nn.Linear(512, 784),
+                nn.Unflatten(-1, (28, 28))
+            )
+
+            # Define VAE model
+            decoder = BernoulliDecoder(decoder_net)
+            encoder = GaussianEncoder(encoder_net)
+            model = VAE(prior, decoder, encoder).to(device)
+            optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+
+            # Train model
+            train(model, optimizer, mnist_train_loader, args.epochs, args.device)
+            model.eval()
+            elbo = 0
+            with torch.no_grad():
+                for x in tqdm(mnist_test_loader, desc="Evaluating"):
+                    x = x[0].to(device)
+                    elbo += model.elbo(x).item()
+            
+            elbo /= len(mnist_test_loader)
+            print(f"ELBO for iteration {i}: {elbo:.4f}")
+            ELBOS.append(elbo)
+
+        print(f"Mean ELBO: {np.mean(ELBOS):.4f} ± {np.std(ELBOS):.4f}, raw ELBOs: {ELBOS}")
+
     elif args.mode == "plot_prior":
         import matplotlib.pyplot as plt
         model.eval()
