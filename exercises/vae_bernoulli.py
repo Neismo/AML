@@ -6,13 +6,81 @@
 
 from flow import MaskedCouplingLayer
 from flow import Flow
-
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.distributions as td
 import torch.utils.data
 from torch.nn import functional as F
 from tqdm import tqdm
+
+
+def plot_prior_vs_posterior(model, test_loader, device, save_path):
+    import matplotlib.pyplot as plt
+    from sklearn.decomposition import PCA
+    import torch
+    from tqdm import tqdm
+
+    model.eval()
+    latents = []
+    labels = []
+
+    # 1. Collect Aggregated Posterior Samples
+    with torch.no_grad():
+        for x, y in tqdm(test_loader, desc="Encoding Posterior"):
+            x = x.to(device)
+            # Assuming model.encoder returns a distribution object
+            q = model.encoder(x)
+            z_post = q.mean.cpu() 
+            latents.append(z_post)
+            labels.append(y)
+    
+    posterior_z = torch.cat(latents, dim=0).numpy()
+    labels = torch.cat(labels, dim=0).numpy()
+
+    # 2. Collect Prior Samples
+    with torch.no_grad():
+        # Handle different prior implementations (Flow vs Standard Normal)
+        if isinstance(model.prior, Flow):
+            prior_z = model.prior.sample(sample_shape=(posterior_z.shape[0],))
+        else:
+            prior_z = model.prior().sample(torch.Size([posterior_z.shape[0]]))
+            
+    prior_z = prior_z.cpu().numpy()
+
+    # 3. Dimensionality Reduction (PCA)
+    # We fit PCA on the concatenated data to ensure both are in the same 2D space
+    if posterior_z.shape[1] > 2:
+        pca = PCA(n_components=2)
+        combined = np.vstack([posterior_z, prior_z])
+        combined_2d = pca.fit_transform(combined)
+        
+        posterior_2d = combined_2d[:len(posterior_z)]
+        prior_2d = combined_2d[len(posterior_z):]
+    else:
+        posterior_2d = posterior_z
+        prior_2d = prior_z
+
+    # 4. Plotting the Overlap
+    plt.figure(figsize=(8, 8))
+    
+    # Plot Prior first (background)
+    plt.scatter(prior_2d[:, 0], prior_2d[:, 1], 
+                alpha=0.3, s=3, label='Prior $p(z)$', c='gray')
+    
+    # Plot Posterior second (foreground)
+    plt.scatter(posterior_2d[:, 0], posterior_2d[:, 1], 
+                alpha=0.5, s=3, label='Aggregated Posterior $q(z)$', c='crimson')
+
+    plt.title(f"Latent Space Overlap: {type(model.prior).__name__}")
+    plt.xlabel("PC1")
+    plt.ylabel("PC2")
+    plt.legend(markerscale=5) # Larger icons in legend for visibility
+    plt.axis('equal')
+    plt.grid(alpha=0.2)
+    
+    plt.tight_layout()
+    plt.savefig(save_path)
 
 
 class GaussianPrior(nn.Module):
@@ -243,7 +311,7 @@ if __name__ == "__main__":
     # Parse arguments
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('mode', type=str, default='train', choices=['train', 'sample', 'evaluate', 'plot_pca', 'plot_prior'], help='what to do when running the script (default: %(default)s)')
+    parser.add_argument('mode', type=str, default='train', choices=['train', 'sample', 'evaluate', 'plot_pca', 'plot_prior', 'plot'], help='what to do when running the script (default: %(default)s)')
     parser.add_argument('--model', type=str, default='model.pt', help='file to save model to or load model from (default: %(default)s)')
     parser.add_argument('--samples', type=str, default='samples.png', help='file to save samples in (default: %(default)s)')
     parser.add_argument('--device', type=str, default='cpu', choices=['cpu', 'cuda', 'mps'], help='torch device (default: %(default)s)')
@@ -364,7 +432,7 @@ if __name__ == "__main__":
         plt.scatter(z[:, 0], z[:, 1], alpha=0.5, s=2, c='royalblue')
         plt.title(f"Prior Distribution Latent Space ({type(model.prior).__name__})")
         plt.axis('equal')
-        plt.show()
+        plt.savefig(f"exercises/samples/{type(model.prior).__name__}_prior.png")
 
     elif args.mode == "plot_pca":
         from sklearn.decomposition import PCA
@@ -392,8 +460,11 @@ if __name__ == "__main__":
         plt.figure(figsize=(8, 6))
         scatter = plt.scatter(latents_2d[:, 0], latents_2d[:, 1], c=labels, cmap="tab10", alpha=0.6, s=8)
         plt.title("PCA of VAE Latent Space")
-        plt.xlabel("Principal Component 1")
-        plt.ylabel("Principal Component 2")
+        plt.xlabel("PC 1")
+        plt.ylabel("PC 2")
         plt.grid()
         plt.colorbar(scatter, ticks=range(10), label="Label")
-        plt.show()
+        plt.savefig(f"exercises/samples/{type(model.prior).__name__}_pca.png")
+
+    elif args.mode == "plot":
+        plot_prior_vs_posterior(model, mnist_test_loader, device, save_path=f"exercises/samples/{type(model.prior).__name__}_prior_vs_posterior.png")
