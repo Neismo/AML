@@ -263,7 +263,7 @@ if __name__ == "__main__":
             num_hidden = 64
             network = FcNetwork(D, num_hidden)
         else:
-            from exercises.unet import Unet
+            from unet import Unet
             network = Unet()
 
     # Set the number of steps in the diffusion process
@@ -286,15 +286,21 @@ if __name__ == "__main__":
     elif args.mode == 'sample':
         import matplotlib.pyplot as plt
         import numpy as np
+        import time
 
         # Load the model
         model.load_state_dict(torch.load(args.model, map_location=torch.device(args.device)))
 
+        
         # Generate samples
         model.eval()
         with torch.no_grad():
-            samples = (model.sample((60, D))).cpu()
-
+            start_time = time.time()
+            samples = (model.sample((10000, D))).cpu()
+            end_time = time.time()
+            print(f"Time taken: {end_time - start_time} seconds")
+            print(f"Samples per second (wallclock): {10000 / (end_time - start_time)}")
+    
         # Transform the samples back to the original space
         samples = samples / 2 + 0.5
 
@@ -318,4 +324,4 @@ if __name__ == "__main__":
             # MNIST: reshape and save image grid
             samples = samples.clamp(0.0, 1.0)
             samples = samples.view(-1, 1, 28, 28)
-            save_image(samples, args.samples, nrow=10)
+            #save_image(samples, args.samples, nrow=10)
