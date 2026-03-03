@@ -9,6 +9,7 @@ import time
 from flow import MaskedCouplingLayer
 from flow import Flow
 import numpy as np
+import seaborn as sns
 import torch
 import torch.nn as nn
 import torch.distributions as td
@@ -16,7 +17,6 @@ import torch.utils.data
 from torch.nn import functional as F
 from tqdm import tqdm
 from fid import compute_fid
-
 
 def plot_prior_vs_posterior(model, test_loader, device, save_path):
     import matplotlib.pyplot as plt
@@ -27,14 +27,14 @@ def plot_prior_vs_posterior(model, test_loader, device, save_path):
     latents = []
     labels = []
     model.eval()
-    plt.figure(figsize=(8, 6))
+    plt.figure(figsize=(4, 3))
     # 1. Collect Aggregated Posterior Samples
     with torch.no_grad():
         for x, y in tqdm(test_loader, desc="Encoding Posterior"):
             x = x.to(device)
             # Assuming model.encoder returns a distribution object
             q = model.encoder(x)
-            z_post = q.mean.cpu() 
+            z_post = q.sample().cpu()
             latents.append(z_post)
             labels.append(y)
     
@@ -43,7 +43,6 @@ def plot_prior_vs_posterior(model, test_loader, device, save_path):
 
     pca = PCA(n_components=2)
     posterior_2d = pca.fit_transform(posterior_z)
-    scatter = plt.scatter(posterior_2d[:, 0], posterior_2d[:, 1], c=labels, cmap="tab10", alpha=0.6, s=8, marker='x')
 
     # 2. Collect Prior Samples
     with torch.no_grad():
@@ -55,16 +54,15 @@ def plot_prior_vs_posterior(model, test_loader, device, save_path):
             
     prior_z = prior_z.cpu().numpy()
     # Plot prior representations
-    plt.scatter(prior_z[:, 0], prior_z[:, 1], c="gray", cmap="tab10", alpha=0.1, s=8)
+    plt.scatter(posterior_2d[:, 0], posterior_2d[:, 1], color='red', alpha=0.6, s=8, marker='x', label="Posterior")
+    sns.kdeplot(x=prior_z[:, 0], y=prior_z[:, 1], alpha=1.0, color='royalblue', label='Prior')
 
-    plt.title("PCA of VAE Latent Space")
+    plt.title(f"PCA of VAE Latent Space for {type(model.prior).__name__}")
     plt.xlabel("PC 1")
     plt.ylabel("PC 2")
-    plt.grid()
-    plt.savefig(f"exercises/samples/{type(model.prior).__name__}_pca.png")
     plt.grid(alpha=0.2)
-    plt.colorbar(scatter, ticks=range(10), label="Label")
     plt.tight_layout()
+    plt.legend()
     plt.savefig(save_path)
 
 
