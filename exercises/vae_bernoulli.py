@@ -24,10 +24,10 @@ def plot_prior_vs_posterior(model, test_loader, device, save_path):
     import torch
     from tqdm import tqdm
 
-    model.eval()
     latents = []
     labels = []
-
+    model.eval()
+    plt.figure(figsize=(8, 6))
     # 1. Collect Aggregated Posterior Samples
     with torch.no_grad():
         for x, y in tqdm(test_loader, desc="Encoding Posterior"):
@@ -41,6 +41,10 @@ def plot_prior_vs_posterior(model, test_loader, device, save_path):
     posterior_z = torch.cat(latents, dim=0).numpy()
     labels = torch.cat(labels, dim=0).numpy()
 
+    pca = PCA(n_components=2)
+    posterior_2d = pca.fit_transform(posterior_z)
+    scatter = plt.scatter(posterior_2d[:, 0], posterior_2d[:, 1], c=labels, cmap="tab10", alpha=0.6, s=8, marker='x')
+
     # 2. Collect Prior Samples
     with torch.no_grad():
         # Handle different prior implementations (Flow vs Standard Normal)
@@ -50,38 +54,16 @@ def plot_prior_vs_posterior(model, test_loader, device, save_path):
             prior_z = model.prior().sample(torch.Size([posterior_z.shape[0]]))
             
     prior_z = prior_z.cpu().numpy()
+    # Plot prior representations
+    plt.scatter(prior_z[:, 0], prior_z[:, 1], c="gray", cmap="tab10", alpha=0.1, s=8)
 
-    # 3. Dimensionality Reduction (PCA)
-    # We fit PCA on the concatenated data to ensure both are in the same 2D space
-    if posterior_z.shape[1] > 2:
-        pca = PCA(n_components=2)
-        combined = np.vstack([posterior_z, prior_z])
-        combined_2d = pca.fit_transform(combined)
-        
-        posterior_2d = combined_2d[:len(posterior_z)]
-        prior_2d = combined_2d[len(posterior_z):]
-    else:
-        posterior_2d = posterior_z
-        prior_2d = prior_z
-
-    # 4. Plotting the Overlap
-    plt.figure(figsize=(3, 3))
-    
-    # Plot Prior first (background)
-    plt.scatter(prior_2d[:, 0], prior_2d[:, 1], 
-                alpha=0.3, s=3, label='Prior $p(z)$', c='gray')
-    
-    # Plot Posterior second (foreground)
-    plt.scatter(posterior_2d[:, 0], posterior_2d[:, 1], 
-                alpha=0.5, s=3, label='Agg. Post. $q(z)$', c='crimson')
-
-    plt.title(f"{type(model.prior).__name__}")
-    plt.xlabel("PC1")
-    plt.ylabel("PC2")
-    plt.legend(markerscale=5) # Larger icons in legend for visibility
-    plt.axis('equal')
+    plt.title("PCA of VAE Latent Space")
+    plt.xlabel("PC 1")
+    plt.ylabel("PC 2")
+    plt.grid()
+    plt.savefig(f"exercises/samples/{type(model.prior).__name__}_pca.png")
     plt.grid(alpha=0.2)
-    
+    plt.colorbar(scatter, ticks=range(10), label="Label")
     plt.tight_layout()
     plt.savefig(save_path)
 
@@ -348,6 +330,7 @@ if __name__ == "__main__":
     parser.add_argument('--mog-components', type=int, default=10, metavar='K', help='number of MoG components (default: %(default)s)')
     parser.add_argument('--beta', type=float, default=1.0, help='beta parameter for ELBO (default: %(default)s)')
     parser.add_argument('--time', action='store_true', help='whether to time the sampling process (default: %(default)s)')
+    parser.add_argument('--decoder', type=str, default='bernoulli', choices=['bernoulli', 'gaussian'], help='decoder type (default: %(default)s)')
 
     args = parser.parse_args()
     print('# Options')
@@ -392,16 +375,26 @@ if __name__ == "__main__":
         nn.Linear(512, M*2),
     )
 
-    decoder_net = nn.Sequential(
-        nn.Linear(M, 512),
-        nn.ReLU(),
-        nn.Linear(512, 512),
-        nn.ReLU(),
-        nn.Linear(512, 784 * 2)
-    )
+    if args.decoder == 'gaussian':
+        decoder_net = nn.Sequential(
+            nn.Linear(M, 512),
+            nn.ReLU(),
+            nn.Linear(512, 512),
+            nn.ReLU(),
+            nn.Linear(512, 784 * 2)
+        )
+    else:
+        decoder_net = nn.Sequential(
+            nn.Linear(M, 512),
+            nn.ReLU(),
+            nn.Linear(512, 512),
+            nn.ReLU(),
+            nn.Linear(512, 784),
+            nn.Unflatten(-1, (28, 28))
+        )
 
     # Define VAE model
-    decoder = GaussianDecoder(decoder_net)
+    decoder = BernoulliDecoder(decoder_net) if args.decoder == 'bernoulli' else GaussianDecoder(decoder_net)
     encoder = GaussianEncoder(encoder_net)
     model = VAE(prior, decoder, encoder, beta=args.beta).to(device)
 
