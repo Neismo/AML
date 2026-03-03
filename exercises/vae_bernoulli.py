@@ -61,7 +61,7 @@ def plot_prior_vs_posterior(model, test_loader, device, save_path):
     prior_proxy = mlines.Line2D([], [], color='royalblue', label='Prior')
     sns.kdeplot(x=prior_2d[:, 0], y=prior_2d[:, 1], alpha=1.0, color='royalblue', label='Prior', legend=True)
 
-    plt.title(f"PCA of VAE Latent Space for {type(model.prior).__name__}")
+    plt.title(f"{type(model.prior).__name__} PCA space")
     plt.xlabel("PC 1")
     plt.ylabel("PC 2")
     plt.grid(alpha=0.2)
