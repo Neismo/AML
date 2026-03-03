@@ -54,11 +54,12 @@ def plot_prior_vs_posterior(model, test_loader, device, save_path):
             prior_z = model.prior().sample(torch.Size([posterior_z.shape[0]]))
             
     prior_z = prior_z.cpu().numpy()
+    prior_2d = pca.transform(prior_z)
     # Plot prior representations
     plt.scatter(posterior_2d[:, 0], posterior_2d[:, 1], color='red', alpha=0.6, s=8, marker='x', label="Posterior")
     posterior_proxy = mlines.Line2D([], [], color='red', label='Posterior')
     prior_proxy = mlines.Line2D([], [], color='royalblue', label='Prior')
-    sns.kdeplot(x=prior_z[:, 0], y=prior_z[:, 1], alpha=1.0, color='royalblue', label='Prior', legend=True)
+    sns.kdeplot(x=prior_2d[:, 0], y=prior_2d[:, 1], alpha=1.0, color='royalblue', label='Prior', legend=True)
 
     plt.title(f"PCA of VAE Latent Space for {type(model.prior).__name__}")
     plt.xlabel("PC 1")
