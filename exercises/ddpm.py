@@ -240,12 +240,17 @@ if __name__ == "__main__":
         train_loader = torch.utils.data.DataLoader(transform(toy().sample((n_data,))), batch_size=args.batch_size, shuffle=True)
         test_loader = torch.utils.data.DataLoader(transform(toy().sample((n_data,))), batch_size=args.batch_size, shuffle=True)
     else:
-        transform = transforms.Compose([
+        mnist_transform = transforms.Compose([
             transforms.ToTensor(),
             transforms.Lambda(lambda x: x + torch.rand(x.shape) / 255),
             transforms.Lambda(lambda x: (x - 0.5) * 2.0),
             transforms.Lambda(lambda x: x.flatten())
         ])
+        latent_transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Lambda(lambda x: x.squeeze())
+        ])
+        transform = latent_transform if args.data == 'latent' else mnist_transform
         train_data = datasets.MNIST('data/', train=True, download=True, transform=transform)
         test_data = datasets.MNIST('data/', train=False, download=True, transform=transform)
         train_loader = torch.utils.data.DataLoader(train_data, batch_size=args.batch_size, shuffle=True)
@@ -273,8 +278,7 @@ if __name__ == "__main__":
             nn.ReLU(),
             nn.Linear(512, 512),
             nn.ReLU(),
-            nn.Linear(512, 784),
-            nn.Unflatten(-1, (28, 28))
+            nn.Linear(512, 784 * 2),  # outputs mu and log_var concatenated flat
         )
 
         decoder = GaussianDecoder(decoder_net)
@@ -298,8 +302,11 @@ if __name__ == "__main__":
                     x = x.to(self.device)
                     with torch.no_grad():
                         q = self.vae.encoder(x)
-                        z = q.rsample()  # Option A: z ~ q(z|x)
+                        z = q.rsample()
                     yield z
+
+            def __len__(self):
+                return len(self.base_loader)
 
         # Reuse the already-defined MNIST loaders as base loaders
         train_loader = torch.utils.data.DataLoader(LatentDataset(train_loader, vae, args.device), batch_size=None)
@@ -348,7 +355,6 @@ if __name__ == "__main__":
         # Load the model
         model.load_state_dict(torch.load(args.model, map_location=torch.device(args.device)))
 
-        
         # Generate samples
         model.eval()
         with torch.no_grad():
@@ -357,9 +363,7 @@ if __name__ == "__main__":
             end_time = time.time()
             print(f"Time taken: {end_time - start_time} seconds")
             print(f"Samples per second (wallclock): {10000 / (end_time - start_time)}")
-            
-            
-            
+
         if args.data == 'latent':
             # Latent DDPM: decode latent samples with the VAE decoder and save image grid
             with torch.no_grad():
@@ -367,6 +371,7 @@ if __name__ == "__main__":
                 x = vae.decoder(z).sample()
                 x = x.view(-1, 1, 28, 28).cpu()
             save_image(x.clamp(0.0, 1.0), args.samples, nrow=10)
+
         else:
             # Transform the samples back to the original space
             samples = samples / 2 + 0.5
@@ -392,22 +397,29 @@ if __name__ == "__main__":
                 fig.colorbar(im)
                 plt.savefig(args.samples)
                 plt.close()
-            else:
-                # MNIST: compute FID, reshape and save image grid
-                if args.data == 'mnist':
-                    # Get a batch of real MNIST images in [-1, 1], shape (N, 1, 28, 28)
-                    real_batch = next(iter(test_loader))
-                    if isinstance(real_batch, (list, tuple)):
-                        real_batch = real_batch[0]
-                    x_real = real_batch.view(-1, 1, 28, 28).to(args.device)
-                    x_real = (x_real / 2 + 0.5).clamp(0.0, 1.0)
 
-                    # Generated samples are in [-1, 1], reshape to (N, 1, 28, 28)
-                    x_gen = samples.view(-1, 1, 28, 28)
+            else:
+                # MNIST: compute FID using entire test set, reshape and save image grid
+                if args.data == 'mnist':
+                    # Collect all real MNIST test images and rescale from [-1,1] to [0,1]
+                    real_batches = []
+                    for real_batch in test_loader:
+                        if isinstance(real_batch, (list, tuple)):
+                            real_batch = real_batch[0]
+                        real_batches.append(real_batch)
+                    x_real = torch.cat(real_batches, dim=0)
+                    x_real = (x_real / 2 + 0.5).clamp(0.0, 1.0).view(-1, 1, 28, 28).to(args.device)
+
+                    n_test = x_real.shape[0]
+
+                    # Generate same number of samples as test set, already in [0,1]
+                    with torch.no_grad():
+                        samples_fid = model.sample((n_test, D)).to(args.device)
+                    samples_fid = (samples_fid / 2 + 0.5).clamp(0.0, 1.0).view(-1, 1, 28, 28)
 
                     fid = compute_fid(
                         x_real,
-                        x_gen,
+                        samples_fid,
                         device=args.device,
                         classifier_ckpt="models/mnist_classifier.pth",
                     )
