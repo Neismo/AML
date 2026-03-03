@@ -217,7 +217,7 @@ if __name__ == "__main__":
     parser.add_argument('mode', type=str, default='train', choices=['train', 'sample', 'test'], help='what to do when running the script (default: %(default)s)')
     parser.add_argument('--data', type=str, default='tg', choices=['tg', 'cb', 'mnist', 'latent'], help='dataset to use {tg: two Gaussians, cb: chequerboard, mnist: MNIST, latent: VAE latent space} (default: %(default)s)')
     parser.add_argument('--model', type=str, default='model.pt', help='file to save model to or load model from (default: %(default)s)')
-    parser.add_argument('--samples', type=str, default='samples.png', help='file to save samples in (default: %(default)s)')
+    parser.add_argument('--samples', type=str, default='samples/ddpm_samples.png', help='file to save samples in (default: %(default)s)')
     parser.add_argument('--device', type=str, default='cpu', choices=['cpu', 'cuda', 'mps'], help='torch device (default: %(default)s)')
     parser.add_argument('--batch-size', type=int, default=128, metavar='N', help='batch size for training (default: %(default)s)')
     parser.add_argument('--epochs', type=int, default=100, metavar='N', help='number of epochs to train (default: %(default)s)')
@@ -434,3 +434,6 @@ if __name__ == "__main__":
                 samples = samples.clamp(0.0, 1.0)
                 samples = samples.view(-1, 1, 28, 28)
                 save_image(samples, args.samples, nrow=10)
+                # Save 4 samples
+                four = samples[:4]
+                save_image(four, "samples/ddpm_four_samples.png", nrow=4)
