@@ -215,7 +215,7 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('mode', type=str, default='train', choices=['train', 'sample', 'test'], help='what to do when running the script (default: %(default)s)')
-    parser.add_argument('--data', type=str, default='tg', choices=['tg', 'cb', 'mnist'], help='dataset to use {tg: two Gaussians, cb: chequerboard, mnist: MNIST} (default: %(default)s)')
+    parser.add_argument('--data', type=str, default='tg', choices=['tg', 'cb', 'mnist', 'latent'], help='dataset to use {tg: two Gaussians, cb: chequerboard, mnist: MNIST, latent: VAE latent space} (default: %(default)s)')
     parser.add_argument('--model', type=str, default='model.pt', help='file to save model to or load model from (default: %(default)s)')
     parser.add_argument('--samples', type=str, default='samples.png', help='file to save samples in (default: %(default)s)')
     parser.add_argument('--device', type=str, default='cpu', choices=['cpu', 'cuda', 'mps'], help='torch device (default: %(default)s)')
@@ -223,6 +223,8 @@ if __name__ == "__main__":
     parser.add_argument('--epochs', type=int, default=100, metavar='N', help='number of epochs to train (default: %(default)s)')
     parser.add_argument('--lr', type=float, default=1e-3, metavar='V', help='learning rate for training (default: %(default)s)')
     parser.add_argument('--arch', type=str, default='fc', choices=['fc', 'unet'], help='network architecture for MNIST {fc, unet} (default: %(default)s)')
+    parser.add_argument('--vae-model', type=str, default='vae_model.pt', help='file to load VAE model from when using latent DDPM (default: %(default)s)')
+    parser.add_argument('--latent-dim', type=int, default=32, metavar='N', help='dimension of latent variable for latent DDPM (default: %(default)s)')
 
     args = parser.parse_args()
     print('# Options')
@@ -249,6 +251,60 @@ if __name__ == "__main__":
         train_loader = torch.utils.data.DataLoader(train_data, batch_size=args.batch_size, shuffle=True)
         test_loader = torch.utils.data.DataLoader(test_data, batch_size=args.batch_size, shuffle=True)
 
+    # Latent DDPM: override loaders to yield z ~ q(z|x) from a pre-trained VAE
+    if args.data == 'latent':
+        from vae_bernoulli import VAE, GaussianPrior, GaussianEncoder, GaussianDecoder  # adjust import/module name if needed
+
+        # Build the VAE architecture exactly as used in training (assumed correct)
+        M = args.latent_dim
+        prior = GaussianPrior(M)
+
+        encoder_net = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(784, 512),
+            nn.ReLU(),
+            nn.Linear(512, 512),
+            nn.ReLU(),
+            nn.Linear(512, M*2),
+        )
+
+        decoder_net = nn.Sequential(
+            nn.Linear(M, 512),
+            nn.ReLU(),
+            nn.Linear(512, 512),
+            nn.ReLU(),
+            nn.Linear(512, 784),
+            nn.Unflatten(-1, (28, 28))
+        )
+
+        decoder = GaussianDecoder(decoder_net)
+        encoder = GaussianEncoder(encoder_net)
+        vae = VAE(prior, decoder, encoder).to(args.device)
+        vae.load_state_dict(torch.load(args.vae_model, map_location=torch.device(args.device)))
+        vae.eval()
+        for p in vae.parameters():
+            p.requires_grad_(False)
+
+        class LatentDataset(torch.utils.data.IterableDataset):
+            def __init__(self, base_loader, vae, device):
+                super().__init__()
+                self.base_loader = base_loader
+                self.vae = vae
+                self.device = device
+
+            def __iter__(self):
+                for batch in self.base_loader:
+                    x = batch[0] if isinstance(batch, (list, tuple)) else batch
+                    x = x.to(self.device)
+                    with torch.no_grad():
+                        q = self.vae.encoder(x)
+                        z = q.rsample()  # Option A: z ~ q(z|x)
+                    yield z
+
+        # Reuse the already-defined MNIST loaders as base loaders
+        train_loader = torch.utils.data.DataLoader(LatentDataset(train_loader, vae, args.device), batch_size=None)
+        test_loader = torch.utils.data.DataLoader(LatentDataset(test_loader, vae, args.device), batch_size=None)
+
     # Get the dimension of the dataset
     first_batch = next(iter(train_loader))
     if isinstance(first_batch, (list, tuple)):
@@ -260,7 +316,7 @@ if __name__ == "__main__":
         num_hidden = 64
         network = FcNetwork(D, num_hidden)
     else:
-        if args.arch == 'fc':
+        if args.arch == 'fc' or args.data == 'latent':
             num_hidden = 64
             network = FcNetwork(D, num_hidden)
         else:
@@ -301,47 +357,62 @@ if __name__ == "__main__":
             end_time = time.time()
             print(f"Time taken: {end_time - start_time} seconds")
             print(f"Samples per second (wallclock): {10000 / (end_time - start_time)}")
-
-            # FID compute
-            if args.data == 'mnist':
-                # Get a batch of real MNIST images in [-1, 1], shape (N, 1, 28, 28)
-                real_batch = next(iter(test_loader))
-                if isinstance(real_batch, (list, tuple)):
-                    real_batch = real_batch[0]
-                x_real = real_batch.view(-1, 1, 28, 28).to(args.device)
-
-                # Generated samples are in [-1, 1], reshape to (N, 1, 28, 28)
-                x_gen = samples.view(-1, 1, 28, 28)
-
-                fid = compute_fid(
-                    x_real,
-                    x_gen,
-                    device=args.device,
-                    classifier_ckpt="models/mnist_classifier.pth",
-                )
-                print(f"FID (DDPM, MNIST): {fid}")
-    
-        # Transform the samples back to the original space
-        samples = samples / 2 + 0.5
-
-        if args.data in ['tg', 'cb']:
-            # Plot the density of the toy data and the model samples
-            toy_class = {'tg': ToyData.TwoGaussians, 'cb': ToyData.Chequerboard}[args.data]
-            toy = toy_class()
-            coordinates = [[[x,y] for x in np.linspace(*toy.xlim, 1000)] for y in np.linspace(*toy.ylim, 1000)]
-            prob = torch.exp(toy().log_prob(torch.tensor(coordinates)))
-
-            fig, ax = plt.subplots(1, 1, figsize=(7, 5))
-            im = ax.imshow(prob, extent=[toy.xlim[0], toy.xlim[1], toy.ylim[0], toy.ylim[1]], origin='lower', cmap='YlOrRd')
-            ax.scatter(samples[:, 0], samples[:, 1], s=1, c='black', alpha=0.5)
-            ax.set_xlim(toy.xlim)
-            ax.set_ylim(toy.ylim)
-            ax.set_aspect('equal')
-            fig.colorbar(im)
-            plt.savefig(args.samples)
-            plt.close()
+            
+            
+            
+        if args.data == 'latent':
+            # Latent DDPM: decode latent samples with the VAE decoder and save image grid
+            with torch.no_grad():
+                z = samples.to(args.device)
+                x = vae.decoder(z).sample()
+                x = x.view(-1, 1, 28, 28).cpu()
+            save_image(x.clamp(0.0, 1.0), args.samples, nrow=10)
         else:
-            # MNIST: reshape and save image grid
-            samples = samples.clamp(0.0, 1.0)
-            samples = samples.view(-1, 1, 28, 28)
-            save_image(samples, args.samples, nrow=10)
+            # Transform the samples back to the original space
+            samples = samples / 2 + 0.5
+
+            if args.data in ['tg', 'cb']:
+                # Plot the density of the toy data and the model samples
+                toy_class = {'tg': ToyData.TwoGaussians, 'cb': ToyData.Chequerboard}[args.data]
+                toy = toy_class()
+                coordinates = [[[x, y] for x in np.linspace(*toy.xlim, 1000)] for y in np.linspace(*toy.ylim, 1000)]
+                prob = torch.exp(toy().log_prob(torch.tensor(coordinates)))
+
+                fig, ax = plt.subplots(1, 1, figsize=(7, 5))
+                im = ax.imshow(
+                    prob,
+                    extent=[toy.xlim[0], toy.xlim[1], toy.ylim[0], toy.ylim[1]],
+                    origin='lower',
+                    cmap='YlOrRd',
+                )
+                ax.scatter(samples[:, 0], samples[:, 1], s=1, c='black', alpha=0.5)
+                ax.set_xlim(toy.xlim)
+                ax.set_ylim(toy.ylim)
+                ax.set_aspect('equal')
+                fig.colorbar(im)
+                plt.savefig(args.samples)
+                plt.close()
+            else:
+                # MNIST: compute FID, reshape and save image grid
+                if args.data == 'mnist':
+                    # Get a batch of real MNIST images in [-1, 1], shape (N, 1, 28, 28)
+                    real_batch = next(iter(test_loader))
+                    if isinstance(real_batch, (list, tuple)):
+                        real_batch = real_batch[0]
+                    x_real = real_batch.view(-1, 1, 28, 28).to(args.device)
+                    x_real = (x_real / 2 + 0.5).clamp(0.0, 1.0)
+
+                    # Generated samples are in [-1, 1], reshape to (N, 1, 28, 28)
+                    x_gen = samples.view(-1, 1, 28, 28)
+
+                    fid = compute_fid(
+                        x_real,
+                        x_gen,
+                        device=args.device,
+                        classifier_ckpt="models/mnist_classifier.pth",
+                    )
+                    print(f"FID (DDPM, MNIST): {fid}")
+
+                samples = samples.clamp(0.0, 1.0)
+                samples = samples.view(-1, 1, 28, 28)
+                save_image(samples, args.samples, nrow=10)
