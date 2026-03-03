@@ -219,7 +219,7 @@ if __name__ == "__main__":
     parser.add_argument('--model', type=str, default='model.pt', help='file to save model to or load model from (default: %(default)s)')
     parser.add_argument('--samples', type=str, default='samples.png', help='file to save samples in (default: %(default)s)')
     parser.add_argument('--device', type=str, default='cpu', choices=['cpu', 'cuda', 'mps'], help='torch device (default: %(default)s)')
-    parser.add_argument('--batch-size', type=int, default=10000, metavar='N', help='batch size for training (default: %(default)s)')
+    parser.add_argument('--batch-size', type=int, default=128, metavar='N', help='batch size for training (default: %(default)s)')
     parser.add_argument('--epochs', type=int, default=100, metavar='N', help='number of epochs to train (default: %(default)s)')
     parser.add_argument('--lr', type=float, default=1e-3, metavar='V', help='learning rate for training (default: %(default)s)')
     parser.add_argument('--arch', type=str, default='fc', choices=['fc', 'unet'], help='network architecture for MNIST {fc, unet} (default: %(default)s)')
@@ -358,11 +358,17 @@ if __name__ == "__main__":
         # Generate samples
         model.eval()
         with torch.no_grad():
-            start_time = time.time()
             samples = (model.sample((10000, D))).to(args.device)
-            end_time = time.time()
-            print(f"Time taken: {end_time - start_time} seconds")
-            print(f"Samples per second (wallclock): {10000 / (end_time - start_time)}")
+
+            # Measure samples/s using 128 batch size over 1000 iterations
+            n_iters = 1000
+            batch_size = 128
+            iter_start = time.time()
+            for _ in range(n_iters):
+                _ = model.sample((batch_size, D)).to(args.device)
+            iter_end = time.time()
+            total_samples = n_iters * batch_size
+            print(f"Samples per second (wallclock): {total_samples / (iter_end - iter_start):.2f}")
 
         if args.data == 'latent':
             # Latent DDPM: decode latent samples with the VAE decoder and save image grid
