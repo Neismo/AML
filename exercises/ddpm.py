@@ -54,10 +54,10 @@ class DDPM(nn.Module):
         # Sample time steps t ~ Uniform({1, ..., T}) implemented as {0, ..., T-1}
         t = torch.randint(0, self.T, (x.size(0), 1), device=x.device)
 
-        # Get corresponding alphā_t values and their square roots
+        # Get corresponding alpha_t values and their square roots
         alpha_bar_t = self.alpha_cumprod[t]
 
-        # Sample noise ε ~ N(0, I)
+        # Sample noise eps ~ N(0, I)
         noise = torch.randn_like(x)
 
         # Sample x_t using the closed-form q(x_t | x_0)
@@ -66,10 +66,10 @@ class DDPM(nn.Module):
         # Normalised time input for the network in [0, 1]
         t_norm = (t + 1) / self.T
 
-        # Predict the noise ε_θ(x_t, t)
+        # Predict the noise eps_theta(x_t, t)
         noise_pred = self.network(x_t, t_norm)
 
-        # Negative ELBO (up to a constant) given by the per-sample MSE between ε and ε_θ
+        # Negative ELBO (up to a constant) given by the per-sample MSE between eps and eps_theta
         neg_elbo = ((noise_pred - noise) ** 2).mean(dim=1)
 
         return neg_elbo
@@ -101,20 +101,20 @@ class DDPM(nn.Module):
             # Flatten x_t for the network
             x_t_flat = x_t.flatten(1) 
 
-            # Predict the noise ε_θ(x_t, t)
+            # Predict the noise eps_theta(x_t, t)
             noise_pred = self.network(x_t_flat, t_norm).view_as(x_t)
 
-            # Get α_t, β_t and ᾱ_t for this time step
+            # Get alpha_t, beta_t and alpha_bar_t for this time step
             alpha_t = self.alpha[t]
             beta_t = self.beta[t]
             alpha_bar_t = self.alpha_cumprod[t]
 
-            # Compute the mean of p_θ(x_{t-1} | x_t)
+            # Compute the mean of p_theta(x_{t-1} | x_t)
             coef1 = 1 / torch.sqrt(alpha_t)
             coef2 = (1 - alpha_t) / torch.sqrt(1 - alpha_bar_t)
             mean = coef1 * (x_t - coef2 * noise_pred)
 
-            # Add Gaussian noise with variance β_t, except for the last step
+            # Add Gaussian noise with variance beta_t, except for the last step
             if t > 0:
                 noise = torch.randn_like(x_t)
                 x_t = mean + torch.sqrt(beta_t) * noise
@@ -170,7 +170,7 @@ def train(model, optimizer, data_loader, epochs, device):
             optimizer.step()
 
             # Update progress bar
-            progress_bar.set_postfix(loss=f"⠀{loss.item():12.4f}", epoch=f"{epoch+1}/{epochs}")
+            progress_bar.set_postfix(loss=f" {loss.item():12.4f}", epoch=f"{epoch+1}/{epochs}")
             progress_bar.update()
 
 
@@ -263,7 +263,7 @@ if __name__ == "__main__":
             num_hidden = 64
             network = FcNetwork(D, num_hidden)
         else:
-            from exercises.unet import Unet
+            from unet import Unet
             network = Unet()
 
     # Set the number of steps in the diffusion process
@@ -286,15 +286,21 @@ if __name__ == "__main__":
     elif args.mode == 'sample':
         import matplotlib.pyplot as plt
         import numpy as np
+        import time
 
         # Load the model
         model.load_state_dict(torch.load(args.model, map_location=torch.device(args.device)))
 
+        
         # Generate samples
         model.eval()
         with torch.no_grad():
-            samples = (model.sample((60, D))).cpu()
-
+            start_time = time.time()
+            samples = (model.sample((10000, D))).cpu()
+            end_time = time.time()
+            print(f"Time taken: {end_time - start_time} seconds")
+            print(f"Samples per second (wallclock): {10000 / (end_time - start_time)}")
+    
         # Transform the samples back to the original space
         samples = samples / 2 + 0.5
 

@@ -1,3 +1,4 @@
 data/
 samaples/
 __pycache__/
+*.pyc
