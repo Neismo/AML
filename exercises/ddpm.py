@@ -433,7 +433,6 @@ if __name__ == "__main__":
 
                 samples = samples.clamp(0.0, 1.0)
                 samples = samples.view(-1, 1, 28, 28)
-                save_image(samples, args.samples, nrow=10)
                 # Save 4 samples
                 four = samples[:4]
                 save_image(four, "samples/ddpm_four_samples.png", nrow=4)
