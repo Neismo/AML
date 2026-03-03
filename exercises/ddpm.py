@@ -209,6 +209,7 @@ if __name__ == "__main__":
     from torchvision import datasets, transforms
     from torchvision.utils import save_image
     import ToyData
+    from fid import compute_fid
 
     # Parse arguments
     import argparse
@@ -219,7 +220,7 @@ if __name__ == "__main__":
     parser.add_argument('--samples', type=str, default='samples.png', help='file to save samples in (default: %(default)s)')
     parser.add_argument('--device', type=str, default='cpu', choices=['cpu', 'cuda', 'mps'], help='torch device (default: %(default)s)')
     parser.add_argument('--batch-size', type=int, default=10000, metavar='N', help='batch size for training (default: %(default)s)')
-    parser.add_argument('--epochs', type=int, default=1, metavar='N', help='number of epochs to train (default: %(default)s)')
+    parser.add_argument('--epochs', type=int, default=100, metavar='N', help='number of epochs to train (default: %(default)s)')
     parser.add_argument('--lr', type=float, default=1e-3, metavar='V', help='learning rate for training (default: %(default)s)')
     parser.add_argument('--arch', type=str, default='fc', choices=['fc', 'unet'], help='network architecture for MNIST {fc, unet} (default: %(default)s)')
 
@@ -296,10 +297,29 @@ if __name__ == "__main__":
         model.eval()
         with torch.no_grad():
             start_time = time.time()
-            samples = (model.sample((10000, D))).cpu()
+            samples = (model.sample((10000, D))).to(args.device)
             end_time = time.time()
             print(f"Time taken: {end_time - start_time} seconds")
             print(f"Samples per second (wallclock): {10000 / (end_time - start_time)}")
+
+            # FID compute
+            if args.data == 'mnist':
+                # Get a batch of real MNIST images in [-1, 1], shape (N, 1, 28, 28)
+                real_batch = next(iter(test_loader))
+                if isinstance(real_batch, (list, tuple)):
+                    real_batch = real_batch[0]
+                x_real = real_batch.view(-1, 1, 28, 28).to(args.device)
+
+                # Generated samples are in [-1, 1], reshape to (N, 1, 28, 28)
+                x_gen = samples.view(-1, 1, 28, 28)
+
+                fid = compute_fid(
+                    x_real,
+                    x_gen,
+                    device=args.device,
+                    classifier_ckpt="models/mnist_classifier.pth",
+                )
+                print(f"FID (DDPM, MNIST): {fid}")
     
         # Transform the samples back to the original space
         samples = samples / 2 + 0.5
