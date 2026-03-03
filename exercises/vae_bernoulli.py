@@ -166,6 +166,27 @@ class GaussianEncoder(nn.Module):
         return td.Independent(td.Normal(loc=mean, scale=torch.exp(std)), 1)
 
 
+class GaussianDecoder(nn.Module):
+    def __init__(self, decoder_net):
+        super(GaussianDecoder, self).__init__()
+        self.decoder_net = decoder_net
+
+    def forward(self, z):
+        # 1. Get the flat output from the network (size: batch_size, 1568)
+        output = self.decoder_net(z)
+        
+        # 2. Split into mean and log_var (each size: batch_size, 784)
+        mu_flat, log_var_flat = torch.chunk(output, 2, dim=-1)
+        
+        # 3. Reshape to image dimensions (size: batch_size, 28, 28)
+        mu = mu_flat.view(-1, 28, 28)
+        std = torch.exp(0.5 * log_var_flat).view(-1, 28, 28)
+        
+        # 4. Return the distribution
+        # Independent(..., 2) tells PyTorch that the last 2 dims (28x28) are the "event"
+        return td.Independent(td.Normal(loc=mu, scale=std), 2)
+
+
 class BernoulliDecoder(nn.Module):
     def __init__(self, decoder_net):
         """
@@ -200,7 +221,7 @@ class VAE(nn.Module):
     def __init__(
             self, 
             prior: GaussianPrior | MixtureGaussianPrior | Flow, 
-            decoder: BernoulliDecoder,
+            decoder: BernoulliDecoder | GaussianDecoder,
             encoder: GaussianEncoder,
             beta: float = 1.0,
         ):
@@ -320,8 +341,8 @@ if __name__ == "__main__":
     parser.add_argument('--model', type=str, default='model.pt', help='file to save model to or load model from (default: %(default)s)')
     parser.add_argument('--samples', type=str, default='samples.png', help='file to save samples in (default: %(default)s)')
     parser.add_argument('--device', type=str, default='cpu', choices=['cpu', 'cuda', 'mps'], help='torch device (default: %(default)s)')
-    parser.add_argument('--batch-size', type=int, default=32, metavar='N', help='batch size for training (default: %(default)s)')
-    parser.add_argument('--epochs', type=int, default=10, metavar='N', help='number of epochs to train (default: %(default)s)')
+    parser.add_argument('--batch-size', type=int, default=128, metavar='N', help='batch size for training (default: %(default)s)')
+    parser.add_argument('--epochs', type=int, default=20, metavar='N', help='number of epochs to train (default: %(default)s)')
     parser.add_argument('--latent-dim', type=int, default=32, metavar='N', help='dimension of latent variable (default: %(default)s)')
     parser.add_argument('--prior', type=str, default='gaussian', choices=['gaussian', 'mog', 'flow'], help='prior type (default: %(default)s)')
     parser.add_argument('--mog-components', type=int, default=10, metavar='K', help='number of MoG components (default: %(default)s)')
@@ -335,13 +356,13 @@ if __name__ == "__main__":
 
     device = args.device
 
-    # Load MNIST as binarized at 'thresshold' and create data loaders
+    # Load MNIST dataset
     thresshold = 0.5
     mnist_train_loader = torch.utils.data.DataLoader(datasets.MNIST('data/', train=True, download=True,
-                                                                    transform=transforms.Compose([transforms.ToTensor(), transforms.Lambda(lambda x: (thresshold < x).float().squeeze())])),
+                                                                    transform=transforms.Compose([transforms.ToTensor(), transforms.Lambda(lambda x: x.squeeze())])),
                                                     batch_size=args.batch_size, shuffle=True)
     mnist_test_loader = torch.utils.data.DataLoader(datasets.MNIST('data/', train=False, download=True,
-                                                                transform=transforms.Compose([transforms.ToTensor(), transforms.Lambda(lambda x: (thresshold < x).float().squeeze())])),
+                                                                transform=transforms.Compose([transforms.ToTensor(), transforms.Lambda(lambda x: x.squeeze())])),
                                                     batch_size=args.batch_size, shuffle=True)
 
     # Define prior distribution
@@ -376,12 +397,11 @@ if __name__ == "__main__":
         nn.ReLU(),
         nn.Linear(512, 512),
         nn.ReLU(),
-        nn.Linear(512, 784),
-        nn.Unflatten(-1, (28, 28))
+        nn.Linear(512, 784 * 2)
     )
 
     # Define VAE model
-    decoder = BernoulliDecoder(decoder_net)
+    decoder = GaussianDecoder(decoder_net)
     encoder = GaussianEncoder(encoder_net)
     model = VAE(prior, decoder, encoder, beta=args.beta).to(device)
 
