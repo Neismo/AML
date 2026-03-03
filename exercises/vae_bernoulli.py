@@ -17,6 +17,7 @@ import torch.utils.data
 from torch.nn import functional as F
 from tqdm import tqdm
 from fid import compute_fid
+import matplotlib.lines as mlines
 
 def plot_prior_vs_posterior(model, test_loader, device, save_path):
     import matplotlib.pyplot as plt
@@ -46,7 +47,7 @@ def plot_prior_vs_posterior(model, test_loader, device, save_path):
 
     # 2. Collect Prior Samples
     with torch.no_grad():
-        # Handle different prior implementations (Flow vs Standard Normal)
+        # Handle different prior implementations (Flow vs others)
         if isinstance(model.prior, Flow):
             prior_z = model.prior.sample(sample_shape=(posterior_z.shape[0],))
         else:
@@ -55,14 +56,16 @@ def plot_prior_vs_posterior(model, test_loader, device, save_path):
     prior_z = prior_z.cpu().numpy()
     # Plot prior representations
     plt.scatter(posterior_2d[:, 0], posterior_2d[:, 1], color='red', alpha=0.6, s=8, marker='x', label="Posterior")
-    sns.kdeplot(x=prior_z[:, 0], y=prior_z[:, 1], alpha=1.0, color='royalblue', label='Prior')
+    posterior_proxy = mlines.Line2D([], [], color='red', label='Posterior')
+    prior_proxy = mlines.Line2D([], [], color='royalblue', label='Prior')
+    sns.kdeplot(x=prior_z[:, 0], y=prior_z[:, 1], alpha=1.0, color='royalblue', label='Prior', legend=True)
 
     plt.title(f"PCA of VAE Latent Space for {type(model.prior).__name__}")
     plt.xlabel("PC 1")
     plt.ylabel("PC 2")
     plt.grid(alpha=0.2)
     plt.tight_layout()
-    plt.legend()
+    plt.legend(handles=[posterior_proxy, prior_proxy])
     plt.savefig(save_path)
 
 
