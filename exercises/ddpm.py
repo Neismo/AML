@@ -238,7 +238,7 @@ if __name__ == "__main__":
         toy = toy_class()
         transform = lambda x: (x-0.5)*2.0
         train_loader = torch.utils.data.DataLoader(transform(toy().sample((n_data,))), batch_size=args.batch_size, shuffle=True)
-        test_loader = torch.utils.data.DataLoader(transform(toy().sample((n_data,))), batch_size=args.batch_size, shuffle=True)
+        test_loader = torch.utils.data.DataLoader(transform(toy().sample((n_data,))), batch_size=args.batch_size, shuffle=False)
     else:
         mnist_transform = transforms.Compose([
             transforms.ToTensor(),
@@ -254,11 +254,11 @@ if __name__ == "__main__":
         train_data = datasets.MNIST('data/', train=True, download=True, transform=transform)
         test_data = datasets.MNIST('data/', train=False, download=True, transform=transform)
         train_loader = torch.utils.data.DataLoader(train_data, batch_size=args.batch_size, shuffle=True)
-        test_loader = torch.utils.data.DataLoader(test_data, batch_size=args.batch_size, shuffle=True)
+        test_loader = torch.utils.data.DataLoader(test_data, batch_size=args.batch_size, shuffle=False)
 
     # Latent DDPM: override loaders to yield z ~ q(z|x) from a pre-trained VAE
     if args.data == 'latent':
-        from vae_bernoulli import VAE, GaussianPrior, GaussianEncoder, GaussianDecoder  # adjust import/module name if needed
+        from vae_bernoulli import VAE, GaussianPrior, GaussianEncoder, GaussianDecoder
 
         # Build the VAE architecture exactly as used in training (assumed correct)
         M = args.latent_dim
@@ -319,16 +319,14 @@ if __name__ == "__main__":
     D = first_batch.shape[1]
 
     # Define the network
-    if args.data in ['tg', 'cb']:
+    if args.arch == 'fc':
         num_hidden = 64
+        if args.data == 'latent':
+            num_hidden = 256
         network = FcNetwork(D, num_hidden)
     else:
-        if args.arch == 'fc' or args.data == 'latent':
-            num_hidden = 64
-            network = FcNetwork(D, num_hidden)
-        else:
-            from unet import Unet
-            network = Unet()
+        from unet import Unet
+        network = Unet()
 
     # Set the number of steps in the diffusion process
     T = 1000
