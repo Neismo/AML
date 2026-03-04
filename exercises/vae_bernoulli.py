@@ -154,19 +154,18 @@ class GaussianDecoder(nn.Module):
     def __init__(self, decoder_net):
         super(GaussianDecoder, self).__init__()
         self.decoder_net = decoder_net
-        # Shared/fixed variance parameter for all pixels (learnable)
-        self.log_var = nn.Parameter(torch.zeros(1))
 
     def forward(self, z):
-        # 1. Get the flat output from the network (size: batch_size, 784)
+        # 1. Get output from the network (size: batch_size, 784*2)
         output = self.decoder_net(z)
-        
-        # 2. Reshape to image dimensions (size: batch_size, 28, 28)
-        mu = output.view(-1, 28, 28)
-        
-        # 3. Use shared variance for all pixels
-        std = torch.exp(0.5 * self.log_var)
-        
+
+        # 2. Split into per-pixel mean and log-variance
+        mu, log_var = torch.chunk(output, 2, dim=-1)
+
+        # 3. Reshape to image dimensions (size: batch_size, 28, 28)
+        mu = mu.view(-1, 28, 28)
+        std = torch.exp(0.5 * log_var.view(-1, 28, 28).clamp(-4, 4))
+
         # 4. Return the distribution
         # Independent(..., 2) tells PyTorch that the last 2 dims (28x28) are the "event"
         return td.Independent(td.Normal(loc=mu, scale=std), 2)
@@ -392,8 +391,7 @@ if __name__ == "__main__":
         nn.ReLU(),
         nn.Linear(512, 512),
         nn.ReLU(),
-        nn.Linear(512, 784),
-        nn.Unflatten(-1, (28, 28))
+        nn.Linear(512, 784 * 2),
     )
 
     # Define VAE model
@@ -589,5 +587,7 @@ if __name__ == "__main__":
         x_gen = x_gen.view(-1, 1, 28, 28).to(device)
         x_real = x_real.view(-1, 1, 28, 28).to(device)
 
+        fid = compute_fid(x_real, x_gen, device=device)
+        print(f"FID Score: {fid:.4f}")
         fid = compute_fid(x_real, x_gen, device=device)
         print(f"FID Score: {fid:.4f}")

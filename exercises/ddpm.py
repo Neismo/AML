@@ -278,7 +278,7 @@ if __name__ == "__main__":
             nn.ReLU(),
             nn.Linear(512, 512),
             nn.ReLU(),
-            nn.Linear(512, 784),
+            nn.Linear(512, 784 * 2),
         )
 
         decoder = GaussianDecoder(decoder_net)
@@ -374,7 +374,7 @@ if __name__ == "__main__":
                 classifier_ckpt="exercises/models/mnist_classifier.pth",
             )
             print(f"FID (DDPM latent): {fid}")
-            # save_image(x_gen[:4].cpu(), args.samples, nrow=4)
+            save_image(x_gen[:4].cpu(), args.samples, nrow=4)
 
         elif args.data == 'mnist':
             with torch.no_grad():
@@ -424,9 +424,9 @@ if __name__ == "__main__":
             plt.close()
 
         # Measure samples/s using 128 batch size over 1000 iterations
-        n_iters = 1000
-        iter_start = time.time()
-        with torch.no_grad():
-            for _ in range(n_iters):
-                model.sample((128, D))
-        print(f"Samples per second (wallclock): {n_iters * 128 / (time.time() - iter_start):.2f}")
+        # n_iters = 1000
+        # iter_start = time.time()
+        # with torch.no_grad():
+        #     for _ in range(n_iters):
+        #         model.sample((128, D))
+        # print(f"Samples per second (wallclock): {n_iters * 128 / (time.time() - iter_start):.2f}")
