@@ -6,7 +6,78 @@ import torch.nn as nn
 import torch.distributions as td
 import torch.nn.functional as F
 from tqdm import tqdm
+from vae_bernoulli import VAE
 
+def plot_prior_vs_posterior_tsne(model: "DDPM", vae: VAE, test_loader, device, save_path):
+    import matplotlib.pyplot as plt
+    import matplotlib.lines as mlines
+    import seaborn as sns
+    from sklearn.manifold import TSNE
+    import torch
+    import numpy as np
+    from tqdm import tqdm
+
+    latents = []
+    labels_list = []
+    model.eval()
+
+    # 1. Collect Aggregated Posterior Samples
+    with torch.no_grad():
+        for i, (x, y) in tqdm(enumerate(test_loader), desc="Encoding Posterior"):
+            x = x.to(device)
+            # Assuming vae.encoder returns a distribution object
+            q = vae.encoder(x)
+            z_post = q.sample().cpu()
+            latents.append(z_post)
+            labels_list.append(y.cpu())
+    
+    posterior_z = torch.cat(latents, dim=0).numpy()
+    labels = torch.cat(labels_list, dim=0).numpy()
+
+    # 2. Collect Prior Samples
+    with torch.no_grad():
+        prior_z = model.prior().sample(torch.Size([posterior_z.shape[0]]))
+            
+    prior_z = prior_z.cpu().numpy()
+
+    # 3. sample latent variables from DDPM
+    with torch.no_grad():
+        z_ddpm = model.sample((posterior_z.shape[0], posterior_z.shape[1]))
+        z_ddpm = z_ddpm.cpu().numpy()
+
+    # 4. Apply t-SNE
+    combined_z = np.concatenate([posterior_z, prior_z, z_ddpm], axis=0)
+    
+    print(f"Running t-SNE on {combined_z.shape[0]} samples...")
+    tsne = TSNE(n_components=2, random_state=42, n_jobs=-1)
+    combined_2d = tsne.fit_transform(combined_z)
+    
+    # Split back into posterior and prior
+    posterior_2d = combined_2d[:len(posterior_z)]
+    prior_2d = combined_2d[len(posterior_z):len(posterior_z) + len(prior_z)]
+    ddpm_2d = combined_2d[len(posterior_z) + len(prior_z):]
+
+    # 4. Plotting
+    plt.figure(figsize=(5, 5))
+    
+    # Plot prior as KDE (or scatter if preferred)
+    sns.kdeplot(x=prior_2d[:, 0], y=prior_2d[:, 1], alpha=0.4, color='royalblue', label='Prior', legend=True)
+    #plt.scatter(prior_2d[:, 0], prior_2d[:, 1], color='royalblue', alpha=0.6, s=8, label="Prior", marker='o', edgecolor='none')
+
+    sc_ddpm = plt.scatter(ddpm_2d[:, 0], ddpm_2d[:, 1], c='gray', alpha=0.5, s=2, marker='2', label="DDPM latents")
+
+    # Plot posterior as scatter
+    sc = plt.scatter(posterior_2d[:, 0], posterior_2d[:, 1], c=labels, cmap="tab10",
+                alpha=1, s=2, marker='.', label="Posterior", zorder=5)
+
+    # Create custom legend handles
+    prior_proxy = mlines.Line2D([], [], color='royalblue', lw=2, label='Prior')
+    
+    plt.grid(alpha=0.2)
+    plt.legend(handles=[sc, sc_ddpm, prior_proxy])
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close()
 
 class DDPM(nn.Module):
     def __init__(self, network, beta_1=1e-4, beta_T=2e-2, T=100):
@@ -214,7 +285,7 @@ if __name__ == "__main__":
     # Parse arguments
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('mode', type=str, default='train', choices=['train', 'sample', 'test'], help='what to do when running the script (default: %(default)s)')
+    parser.add_argument('mode', type=str, default='train', choices=['train', 'sample', 'test', 'plot'], help='what to do when running the script (default: %(default)s)')
     parser.add_argument('--data', type=str, default='tg', choices=['tg', 'cb', 'mnist', 'latent'], help='dataset to use {tg: two Gaussians, cb: chequerboard, mnist: MNIST, latent: VAE latent space} (default: %(default)s)')
     parser.add_argument('--model', type=str, default='model.pt', help='file to save model to or load model from (default: %(default)s)')
     parser.add_argument('--samples', type=str, default='samples/ddpm_samples.png', help='file to save samples in (default: %(default)s)')
@@ -329,7 +400,7 @@ if __name__ == "__main__":
         network = Unet()
 
     # Set the number of steps in the diffusion process
-    T = 1000
+    T = 100
 
     # Define model
     model = DDPM(network, T=T).to(args.device)
@@ -344,6 +415,11 @@ if __name__ == "__main__":
 
         # Save model
         torch.save(model.state_dict(), args.model)
+    elif args.mode == 'plot':
+        # Load the model
+        model.load_state_dict(torch.load(args.model, map_location=torch.device(args.device)))
+        # Plot prior vs posterior using t-SNE (or PCA if you prefer)
+        plot_prior_vs_posterior_tsne(model, vae, test_loader, device=args.device, save_path=args.samples)
 
     elif args.mode == 'sample':
         import matplotlib.pyplot as plt
