@@ -38,7 +38,7 @@ def plot_prior_vs_posterior_tsne(model, test_loader, device, save_path):
             x = x.to(device)
             # Assuming model.encoder returns a distribution object
             q = model.encoder(x)
-            z_post = q.mean.cpu()
+            z_post = q.sample().cpu()
             latents.append(z_post)
             labels_list.append(y.cpu())
     
@@ -65,37 +65,32 @@ def plot_prior_vs_posterior_tsne(model, test_loader, device, save_path):
 
     # 3. Apply t-SNE
     # Concatenate both sets because t-SNE doesn't support .transform() on new data
-    # combined_z = np.concatenate([posterior_z, prior_z], axis=0)
+    combined_z = np.concatenate([posterior_z, prior_z], axis=0)
     
-    print(f"Running t-SNE on {posterior_z.shape[0]} samples...")
+    print(f"Running t-SNE on {combined_z.shape[0]} samples...")
     tsne = TSNE(n_components=2, random_state=42, n_jobs=-1)
-    combined_2d = tsne.fit_transform(posterior_z)
+    combined_2d = tsne.fit_transform(combined_z)
     
     # Split back into posterior and prior
     posterior_2d = combined_2d[:len(posterior_z)]
-    # prior_2d = combined_2d[len(posterior_z):]
+    prior_2d = combined_2d[len(posterior_z):]
 
     # 4. Plotting
     plt.figure(figsize=(5, 5))
     
     # Plot prior as KDE (or scatter if preferred)
-    #sns.kdeplot(x=prior_2d[:, 0], y=prior_2d[:, 1], alpha=0.8, 
-    #            color='royalblue', label='Prior', fill=True)
+    sns.kdeplot(x=prior_2d[:, 0], y=prior_2d[:, 1], alpha=0.4, color='royalblue', label='Prior', legend=True)
+    #plt.scatter(prior_2d[:, 0], prior_2d[:, 1], color='royalblue', alpha=0.6, s=8, label="Prior", marker='o', edgecolor='none')
 
     # Plot posterior as scatter
-    plt.scatter(posterior_2d[:, 0], posterior_2d[:, 1], c=labels, cmap="tab10",
-                alpha=0.4, s=5, marker='x', label="Posterior")
+    sc = plt.scatter(posterior_2d[:, 0], posterior_2d[:, 1], c=labels, cmap="tab10",
+                alpha=1, s=2, marker='.', label="Posterior", zorder=5)
 
     # Create custom legend handles
-    posterior_proxy = mlines.Line2D([], [], color='red', marker='x', 
-                                    linestyle='None', label='Posterior')
     prior_proxy = mlines.Line2D([], [], color='royalblue', lw=2, label='Prior')
     
-    plt.title(f"t-SNE: {type(model.prior).__name__} Latent Space")
-    plt.xlabel("t-SNE 1")
-    plt.ylabel("t-SNE 2")
     plt.grid(alpha=0.2)
-    plt.legend(handles=[posterior_proxy, prior_proxy])
+    plt.legend(handles=[sc, prior_proxy])
     plt.tight_layout()
     plt.savefig(save_path)
     plt.close()
@@ -190,8 +185,8 @@ class MixtureGaussianPrior(nn.Module):
         self.M = M
         self.K = K
         self.logits = nn.Parameter(torch.zeros(self.K))
-        self.loc = nn.Parameter(torch.zeros(self.K, self.M))
-        self.scale = nn.Parameter(torch.ones(self.K, self.M))
+        self.loc = nn.Parameter(torch.randn(self.K, self.M) * 0.1)
+        self.scale = nn.Parameter(torch.ones(self.K, self.M) * 0.1)
 
     def forward(self):
         """
@@ -467,13 +462,23 @@ if __name__ == "__main__":
         nn.ReLU(),
         nn.Linear(512, M*2),
     )
-    decoder_net = nn.Sequential(
-        nn.Linear(M, 512),
-        nn.ReLU(),
-        nn.Linear(512, 512),
-        nn.ReLU(),
-        nn.Linear(512, 784 * 2),
-    )
+    if args.decoder == 'bernoulli':
+        decoder_net = nn.Sequential(
+            nn.Linear(M, 512),
+            nn.ReLU(),
+            nn.Linear(512, 512),
+            nn.ReLU(),
+            nn.Linear(512, 784),
+            nn.Unflatten(-1, (28, 28))
+        )
+    else:
+        decoder_net = nn.Sequential(
+            nn.Linear(M, 512),
+            nn.ReLU(),
+            nn.Linear(512, 512),
+            nn.ReLU(),
+            nn.Linear(512, 784 * 2),
+        )
 
     # Define VAE model
     decoder = BernoulliDecoder(decoder_net) if args.decoder == 'bernoulli' else GaussianDecoder(decoder_net)
@@ -647,7 +652,7 @@ if __name__ == "__main__":
 
     elif args.mode == "plot":
         model.load_state_dict(torch.load(args.model, map_location=torch.device(args.device)))
-        plot_prior_vs_posterior_tsne(model, mnist_test_loader, device, save_path=f"exercises/samples/{type(model.prior).__name__}_prior_vs_posterior.png")
+        plot_prior_vs_posterior(model, mnist_test_loader, device, save_path=f"exercises/samples/{type(model.prior).__name__}_prior_vs_posterior.png")
 
     elif args.mode == "fid":
         model.load_state_dict(torch.load(args.model, map_location=torch.device(args.device)))
