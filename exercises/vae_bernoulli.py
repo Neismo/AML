@@ -48,18 +48,10 @@ def plot_prior_vs_posterior_tsne(model, test_loader, device, save_path):
     # 2. Collect Prior Samples
     with torch.no_grad():
         # Handle different prior implementations (Flow vs others)
-        # Note: 'Flow' needs to be defined in your scope or imported
-        if hasattr(model, 'prior') and hasattr(model.prior, 'sample'):
-            # This logic depends on your specific model implementation
-            try:
-                # Try Flow-style sampling
-                prior_z = model.prior.sample(sample_shape=(posterior_z.shape[0],))
-            except TypeError:
-                # Try Standard distribution-style sampling
-                prior_z = model.prior().sample(torch.Size([posterior_z.shape[0]]))
+        if isinstance(model.prior, Flow):
+            prior_z = model.prior.sample(sample_shape=(posterior_z.shape[0],))
         else:
-            # Fallback/Default
-            prior_z = torch.randn(posterior_z.shape)
+            prior_z = model.prior().sample(torch.Size([posterior_z.shape[0]]))
             
     prior_z = prior_z.cpu().numpy()
 
@@ -104,7 +96,7 @@ def plot_prior_vs_posterior(model, test_loader, device, save_path):
     latents = []
     labels = []
     model.eval()
-    plt.figure(figsize=(4, 3))
+    plt.figure(figsize=(5, 5))
     # 1. Collect Aggregated Posterior Samples
     with torch.no_grad():
         for x, y in tqdm(test_loader, desc="Encoding Posterior"):
@@ -132,7 +124,7 @@ def plot_prior_vs_posterior(model, test_loader, device, save_path):
     prior_z = prior_z.cpu().numpy()
     prior_2d = pca.transform(prior_z)
     # Plot prior representations
-    plt.scatter(posterior_2d[:, 0], posterior_2d[:, 1], color='red', alpha=0.6, s=8, marker='x', label="Posterior")
+    plt.scatter(posterior_2d[:, 0], posterior_2d[:, 1], c=labels, alpha=0.6, s=8, marker='x', label="Posterior")
     posterior_proxy = mlines.Line2D([], [], color='red', label='Posterior')
     prior_proxy = mlines.Line2D([], [], color='royalblue', label='Prior')
     sns.kdeplot(x=prior_2d[:, 0], y=prior_2d[:, 1], alpha=1.0, color='royalblue', label='Prior', legend=True)
@@ -652,7 +644,7 @@ if __name__ == "__main__":
 
     elif args.mode == "plot":
         model.load_state_dict(torch.load(args.model, map_location=torch.device(args.device)))
-        plot_prior_vs_posterior(model, mnist_test_loader, device, save_path=f"exercises/samples/{type(model.prior).__name__}_prior_vs_posterior.png")
+        plot_prior_vs_posterior_tsne(model, mnist_test_loader, device, save_path=f"exercises/samples/{type(model.prior).__name__}_prior_vs_posterior.png")
 
     elif args.mode == "fid":
         model.load_state_dict(torch.load(args.model, map_location=torch.device(args.device)))
