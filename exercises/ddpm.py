@@ -50,7 +50,7 @@ def plot_prior_vs_posterior_tsne(model: "DDPM", vae: VAE, test_loader, device, s
     combined_z = np.concatenate([posterior_z, prior_z, z_ddpm], axis=0)
     
     print(f"Running t-SNE on {combined_z.shape[0]} samples...")
-    tsne = TSNE(n_components=2, random_state=42, n_jobs=-1)
+    tsne = TSNE(n_components=2, random_state=42, n_jobs=-1, verbose=1)
     combined_2d = tsne.fit_transform(combined_z)
     
     # Split back into posterior and prior
@@ -65,17 +65,16 @@ def plot_prior_vs_posterior_tsne(model: "DDPM", vae: VAE, test_loader, device, s
     sns.kdeplot(x=prior_2d[:, 0], y=prior_2d[:, 1], alpha=0.4, color='royalblue', label='Prior', legend=True)
     #plt.scatter(prior_2d[:, 0], prior_2d[:, 1], color='royalblue', alpha=0.6, s=8, label="Prior", marker='o', edgecolor='none')
 
-    sc_ddpm = plt.scatter(ddpm_2d[:, 0], ddpm_2d[:, 1], edgecolors='red', facecolors='none', alpha=0.1, s=5, marker='o', label="DDPM latents", zorder=10)
+    sc_ddpm = plt.scatter(ddpm_2d[:, 0], ddpm_2d[:, 1], edgecolors='red', facecolors='none', alpha=0.9, s=4, label="DDPM latents", zorder=10, linewidths=0.2)
 
     # Plot posterior as scatter
     sc = plt.scatter(posterior_2d[:, 0], posterior_2d[:, 1], c=labels, cmap="tab10",
                 alpha=1, s=2, marker='.', label="Posterior", zorder=5)
 
     # Create custom legend handles
-    prior_proxy = mlines.Line2D([], [], color='royalblue', lw=2, label='Prior')
-    
+    prior_proxy = mlines.Line2D([], [], color='royalblue', lw=1.5, label='Prior')
+    plt.legend(handles=[sc, sc_ddpm, prior_proxy], markerscale=5)
     plt.grid(alpha=0.2)
-    plt.legend(handles=[sc, sc_ddpm, prior_proxy])
     plt.xlabel("t-SNE 1", fontsize=12)
     plt.ylabel("t-SNE 2", fontsize=12)
     plt.colorbar(sc, label="Label")
@@ -393,18 +392,19 @@ if __name__ == "__main__":
         first_batch = first_batch[0]
     D = first_batch.shape[1]
 
+    # Set the number of steps in the diffusion process
+    T = 1000
+
     # Define the network
     if args.arch == 'fc':
         num_hidden = 64
         if args.data == 'latent':
             num_hidden = 256
+            T = 100 # Fewer steps needed in latent space
         network = FcNetwork(D, num_hidden)
     else:
         from unet import Unet
         network = Unet()
-
-    # Set the number of steps in the diffusion process
-    T = 1000
 
     # Define model
     model = DDPM(network, T=T).to(args.device)
@@ -508,9 +508,9 @@ if __name__ == "__main__":
             plt.close()
 
         # Measure samples/s using 128 batch size over 1000 iterations
-        # n_iters = 1000
-        # iter_start = time.time()
-        # with torch.no_grad():
-        #     for _ in range(n_iters):
-        #         model.sample((128, D))
-        # print(f"Samples per second (wallclock): {n_iters * 128 / (time.time() - iter_start):.2f}")
+        n_iters = 1000
+        iter_start = time.time()
+        with torch.no_grad():
+            for _ in range(n_iters):
+                model.sample((128, D))
+        print(f"Samples per second (wallclock): {n_iters * 128 / (time.time() - iter_start):.2f}")
