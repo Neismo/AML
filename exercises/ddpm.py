@@ -355,84 +355,65 @@ if __name__ == "__main__":
         # Load the model
         model.load_state_dict(torch.load(args.model, map_location=torch.device(args.device)))
 
-        # Generate samples
         model.eval()
-        with torch.no_grad():
-            samples = (model.sample((10000, D))).to(args.device)
-
-            # Measure samples/s using 128 batch size over 1000 iterations
-            n_iters = 1000
-            batch_size = 128
-            iter_start = time.time()
-            for _ in range(n_iters):
-                _ = model.sample((batch_size, D)).to(args.device)
-            iter_end = time.time()
-            total_samples = n_iters * batch_size
-            print(f"Samples per second (wallclock): {total_samples / (iter_end - iter_start):.2f}")
 
         if args.data == 'latent':
-            # Latent DDPM: decode latent samples with the VAE decoder and save image grid
             with torch.no_grad():
-                z = samples.to(args.device)
-                x = vae.decoder(z).sample()
-                x = x.view(-1, 1, 28, 28).cpu()
-            save_image(x.clamp(0.0, 1.0), args.samples, nrow=10)
+                z = model.sample((4, D)).to(args.device)
+                x = vae.decoder(z).sample().view(-1, 1, 28, 28).cpu()
+            save_image(x.clamp(0.0, 1.0), args.samples, nrow=4)
+
+        elif args.data == 'mnist':
+            with torch.no_grad():
+                samples = model.sample((10000, D)).to(args.device)
+            samples = (samples / 2 + 0.5).clamp(0.0, 1.0).view(-1, 1, 28, 28)
+
+            real_batches = []
+            for real_batch in test_loader:
+                if isinstance(real_batch, (list, tuple)):
+                    real_batch = real_batch[0]
+                real_batches.append(real_batch)
+            x_real = torch.cat(real_batches, dim=0)
+            x_real = (x_real / 2 + 0.5).clamp(0.0, 1.0).view(-1, 1, 28, 28).to(args.device)
+
+            fid = compute_fid(
+                x_real,
+                samples,
+                device=args.device,
+                classifier_ckpt="models/mnist_classifier.pth",
+            )
+            print(f"FID (DDPM, MNIST): {fid}")
+            save_image(samples[:4], args.samples, nrow=4)
 
         else:
-            # Transform the samples back to the original space
-            samples = samples / 2 + 0.5
+            with torch.no_grad():
+                samples = model.sample((10000, D)).to(args.device)
+            samples = (samples / 2 + 0.5)
 
-            if args.data in ['tg', 'cb']:
-                # Plot the density of the toy data and the model samples
-                toy_class = {'tg': ToyData.TwoGaussians, 'cb': ToyData.Chequerboard}[args.data]
-                toy = toy_class()
-                coordinates = [[[x, y] for x in np.linspace(*toy.xlim, 1000)] for y in np.linspace(*toy.ylim, 1000)]
-                prob = torch.exp(toy().log_prob(torch.tensor(coordinates)))
+            toy_class = {'tg': ToyData.TwoGaussians, 'cb': ToyData.Chequerboard}[args.data]
+            toy = toy_class()
+            coordinates = [[[x, y] for x in np.linspace(*toy.xlim, 1000)] for y in np.linspace(*toy.ylim, 1000)]
+            prob = torch.exp(toy().log_prob(torch.tensor(coordinates)))
 
-                fig, ax = plt.subplots(1, 1, figsize=(7, 5))
-                im = ax.imshow(
-                    prob,
-                    extent=[toy.xlim[0], toy.xlim[1], toy.ylim[0], toy.ylim[1]],
-                    origin='lower',
-                    cmap='YlOrRd',
-                )
-                ax.scatter(samples[:, 0], samples[:, 1], s=1, c='black', alpha=0.5)
-                ax.set_xlim(toy.xlim)
-                ax.set_ylim(toy.ylim)
-                ax.set_aspect('equal')
-                fig.colorbar(im)
-                plt.savefig(args.samples)
-                plt.close()
+            fig, ax = plt.subplots(1, 1, figsize=(7, 5))
+            im = ax.imshow(
+                prob,
+                extent=[toy.xlim[0], toy.xlim[1], toy.ylim[0], toy.ylim[1]],
+                origin='lower',
+                cmap='YlOrRd',
+            )
+            ax.scatter(samples[:, 0], samples[:, 1], s=1, c='black', alpha=0.5)
+            ax.set_xlim(toy.xlim)
+            ax.set_ylim(toy.ylim)
+            ax.set_aspect('equal')
+            fig.colorbar(im)
+            plt.savefig(args.samples)
+            plt.close()
 
-            else:
-                # MNIST: compute FID using entire test set, reshape and save image grid
-                if args.data == 'mnist':
-                    # Collect all real MNIST test images and rescale from [-1,1] to [0,1]
-                    real_batches = []
-                    for real_batch in test_loader:
-                        if isinstance(real_batch, (list, tuple)):
-                            real_batch = real_batch[0]
-                        real_batches.append(real_batch)
-                    x_real = torch.cat(real_batches, dim=0)
-                    x_real = (x_real / 2 + 0.5).clamp(0.0, 1.0).view(-1, 1, 28, 28).to(args.device)
-
-                    n_test = x_real.shape[0]
-
-                    # Generate same number of samples as test set, already in [0,1]
-                    with torch.no_grad():
-                        samples_fid = model.sample((n_test, D)).to(args.device)
-                    samples_fid = (samples_fid / 2 + 0.5).clamp(0.0, 1.0).view(-1, 1, 28, 28)
-
-                    fid = compute_fid(
-                        x_real,
-                        samples_fid,
-                        device=args.device,
-                        classifier_ckpt="models/mnist_classifier.pth",
-                    )
-                    print(f"FID (DDPM, MNIST): {fid}")
-
-                samples = samples.clamp(0.0, 1.0)
-                samples = samples.view(-1, 1, 28, 28)
-                # Save 4 samples
-                four = samples[:4]
-                save_image(four, "samples/ddpm_four_samples.png", nrow=4)
+        # Measure samples/s using 128 batch size over 1000 iterations
+        n_iters = 1000
+        iter_start = time.time()
+        with torch.no_grad():
+            for _ in range(n_iters):
+                model.sample((128, D))
+        print(f"Samples per second (wallclock): {n_iters * 128 / (time.time() - iter_start):.2f}")
