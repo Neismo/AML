@@ -154,17 +154,18 @@ class GaussianDecoder(nn.Module):
     def __init__(self, decoder_net):
         super(GaussianDecoder, self).__init__()
         self.decoder_net = decoder_net
+        # Shared/fixed variance parameter for all pixels (learnable)
+        self.log_var = nn.Parameter(torch.zeros(1))
 
     def forward(self, z):
-        # 1. Get the flat output from the network (size: batch_size, 1568)
+        # 1. Get the flat output from the network (size: batch_size, 784)
         output = self.decoder_net(z)
         
-        # 2. Split into mean and log_var (each size: batch_size, 784)
-        mu_flat, log_var_flat = torch.chunk(output, 2, dim=-1)
+        # 2. Reshape to image dimensions (size: batch_size, 28, 28)
+        mu = output.view(-1, 28, 28)
         
-        # 3. Reshape to image dimensions (size: batch_size, 28, 28)
-        mu = mu_flat.view(-1, 28, 28)
-        std = torch.exp(0.5 * log_var_flat).view(-1, 28, 28)
+        # 3. Use shared variance for all pixels
+        std = torch.exp(0.5 * self.log_var)
         
         # 4. Return the distribution
         # Independent(..., 2) tells PyTorch that the last 2 dims (28x28) are the "event"
@@ -376,24 +377,14 @@ if __name__ == "__main__":
         nn.ReLU(),
         nn.Linear(512, M*2),
     )
-
-    if args.decoder == 'gaussian':
-        decoder_net = nn.Sequential(
-            nn.Linear(M, 512),
-            nn.ReLU(),
-            nn.Linear(512, 512),
-            nn.ReLU(),
-            nn.Linear(512, 784 * 2)
-        )
-    else:
-        decoder_net = nn.Sequential(
-            nn.Linear(M, 512),
-            nn.ReLU(),
-            nn.Linear(512, 512),
-            nn.ReLU(),
-            nn.Linear(512, 784),
-            nn.Unflatten(-1, (28, 28))
-        )
+    decoder_net = nn.Sequential(
+        nn.Linear(M, 512),
+        nn.ReLU(),
+        nn.Linear(512, 512),
+        nn.ReLU(),
+        nn.Linear(512, 784),
+        nn.Unflatten(-1, (28, 28))
+    )
 
     # Define VAE model
     decoder = BernoulliDecoder(decoder_net) if args.decoder == 'bernoulli' else GaussianDecoder(decoder_net)
