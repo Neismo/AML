@@ -59,13 +59,13 @@ def plot_prior_vs_posterior_tsne(model: "DDPM", vae: VAE, test_loader, device, s
     ddpm_2d = combined_2d[len(posterior_z) + len(prior_z):]
 
     # 5. Plotting
-    plt.figure(figsize=(5, 5))
+    plt.figure(figsize=(7, 5))
     
     # Plot prior as KDE (or scatter if preferred)
     sns.kdeplot(x=prior_2d[:, 0], y=prior_2d[:, 1], alpha=0.4, color='royalblue', label='Prior', legend=True)
     #plt.scatter(prior_2d[:, 0], prior_2d[:, 1], color='royalblue', alpha=0.6, s=8, label="Prior", marker='o', edgecolor='none')
 
-    sc_ddpm = plt.scatter(ddpm_2d[:, 0], ddpm_2d[:, 1], c='gray', alpha=0.5, s=2, marker='2', label="DDPM latents")
+    sc_ddpm = plt.scatter(ddpm_2d[:, 0], ddpm_2d[:, 1], edgecolors='red', facecolors='none', alpha=0.1, s=5, marker='o', label="DDPM latents", zorder=10)
 
     # Plot posterior as scatter
     sc = plt.scatter(posterior_2d[:, 0], posterior_2d[:, 1], c=labels, cmap="tab10",
@@ -76,8 +76,11 @@ def plot_prior_vs_posterior_tsne(model: "DDPM", vae: VAE, test_loader, device, s
     
     plt.grid(alpha=0.2)
     plt.legend(handles=[sc, sc_ddpm, prior_proxy])
+    plt.xlabel("t-SNE 1", fontsize=12)
+    plt.ylabel("t-SNE 2", fontsize=12)
+    plt.colorbar(sc, label="Label")
     plt.tight_layout()
-    plt.savefig(save_path)
+    plt.savefig(save_path, dpi=300)
     plt.close()
 
 class DDPM(nn.Module):
