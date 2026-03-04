@@ -20,6 +20,7 @@ def plot_prior_vs_posterior_tsne(model: "DDPM", vae: VAE, test_loader, device, s
     latents = []
     labels_list = []
     model.eval()
+    vae.eval()
 
     # 1. Collect Aggregated Posterior Samples
     with torch.no_grad():
@@ -36,7 +37,7 @@ def plot_prior_vs_posterior_tsne(model: "DDPM", vae: VAE, test_loader, device, s
 
     # 2. Collect Prior Samples
     with torch.no_grad():
-        prior_z = model.prior().sample(torch.Size([posterior_z.shape[0]]))
+        prior_z = vae.prior().sample(torch.Size([posterior_z.shape[0]]))
             
     prior_z = prior_z.cpu().numpy()
 
@@ -57,7 +58,7 @@ def plot_prior_vs_posterior_tsne(model: "DDPM", vae: VAE, test_loader, device, s
     prior_2d = combined_2d[len(posterior_z):len(posterior_z) + len(prior_z)]
     ddpm_2d = combined_2d[len(posterior_z) + len(prior_z):]
 
-    # 4. Plotting
+    # 5. Plotting
     plt.figure(figsize=(5, 5))
     
     # Plot prior as KDE (or scatter if preferred)
@@ -400,7 +401,7 @@ if __name__ == "__main__":
         network = Unet()
 
     # Set the number of steps in the diffusion process
-    T = 100
+    T = 1000
 
     # Define model
     model = DDPM(network, T=T).to(args.device)
@@ -418,6 +419,10 @@ if __name__ == "__main__":
     elif args.mode == 'plot':
         # Load the model
         model.load_state_dict(torch.load(args.model, map_location=torch.device(args.device)))
+
+        train_loader = torch.utils.data.DataLoader(train_data, batch_size=args.batch_size, shuffle=True)
+        test_loader = torch.utils.data.DataLoader(test_data, batch_size=args.batch_size, shuffle=False)
+
         # Plot prior vs posterior using t-SNE (or PCA if you prefer)
         plot_prior_vs_posterior_tsne(model, vae, test_loader, device=args.device, save_path=args.samples)
 
