@@ -347,7 +347,7 @@ if __name__ == "__main__":
     if args.decoder == 'bernoulli':
         transform = transforms.Compose([
             transforms.ToTensor(),
-            transforms.Lambda(lambda x: (x < thresshold).float().squeeze())
+            transforms.Lambda(lambda x: (thresshold < x).float().squeeze())
         ])
     else:
         transform = transforms.Compose([
