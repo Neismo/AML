@@ -19,6 +19,87 @@ from tqdm import tqdm
 from fid import compute_fid
 import matplotlib.lines as mlines
 
+def plot_prior_vs_posterior_tsne(model, test_loader, device, save_path):
+    import matplotlib.pyplot as plt
+    import matplotlib.lines as mlines
+    import seaborn as sns
+    from sklearn.manifold import TSNE
+    import torch
+    import numpy as np
+    from tqdm import tqdm
+
+    latents = []
+    labels_list = []
+    model.eval()
+    
+    # 1. Collect Aggregated Posterior Samples
+    with torch.no_grad():
+        for i, (x, y) in tqdm(enumerate(test_loader), desc="Encoding Posterior"):
+            x = x.to(device)
+            # Assuming model.encoder returns a distribution object
+            q = model.encoder(x)
+            z_post = q.mean.cpu()
+            latents.append(z_post)
+            labels_list.append(y.cpu())
+    
+    posterior_z = torch.cat(latents, dim=0).numpy()
+    labels = torch.cat(labels_list, dim=0).numpy()
+
+    # 2. Collect Prior Samples
+    with torch.no_grad():
+        # Handle different prior implementations (Flow vs others)
+        # Note: 'Flow' needs to be defined in your scope or imported
+        if hasattr(model, 'prior') and hasattr(model.prior, 'sample'):
+            # This logic depends on your specific model implementation
+            try:
+                # Try Flow-style sampling
+                prior_z = model.prior.sample(sample_shape=(posterior_z.shape[0],))
+            except TypeError:
+                # Try Standard distribution-style sampling
+                prior_z = model.prior().sample(torch.Size([posterior_z.shape[0]]))
+        else:
+            # Fallback/Default
+            prior_z = torch.randn(posterior_z.shape)
+            
+    prior_z = prior_z.cpu().numpy()
+
+    # 3. Apply t-SNE
+    # Concatenate both sets because t-SNE doesn't support .transform() on new data
+    # combined_z = np.concatenate([posterior_z, prior_z], axis=0)
+    
+    print(f"Running t-SNE on {posterior_z.shape[0]} samples...")
+    tsne = TSNE(n_components=2, random_state=42, n_jobs=-1)
+    combined_2d = tsne.fit_transform(posterior_z)
+    
+    # Split back into posterior and prior
+    posterior_2d = combined_2d[:len(posterior_z)]
+    # prior_2d = combined_2d[len(posterior_z):]
+
+    # 4. Plotting
+    plt.figure(figsize=(5, 5))
+    
+    # Plot prior as KDE (or scatter if preferred)
+    #sns.kdeplot(x=prior_2d[:, 0], y=prior_2d[:, 1], alpha=0.8, 
+    #            color='royalblue', label='Prior', fill=True)
+
+    # Plot posterior as scatter
+    plt.scatter(posterior_2d[:, 0], posterior_2d[:, 1], c=labels, cmap="tab10",
+                alpha=0.4, s=5, marker='x', label="Posterior")
+
+    # Create custom legend handles
+    posterior_proxy = mlines.Line2D([], [], color='red', marker='x', 
+                                    linestyle='None', label='Posterior')
+    prior_proxy = mlines.Line2D([], [], color='royalblue', lw=2, label='Prior')
+    
+    plt.title(f"t-SNE: {type(model.prior).__name__} Latent Space")
+    plt.xlabel("t-SNE 1")
+    plt.ylabel("t-SNE 2")
+    plt.grid(alpha=0.2)
+    plt.legend(handles=[posterior_proxy, prior_proxy])
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close()
+
 def plot_prior_vs_posterior(model, test_loader, device, save_path):
     import matplotlib.pyplot as plt
     from sklearn.decomposition import PCA
@@ -565,7 +646,8 @@ if __name__ == "__main__":
         plt.savefig(f"exercises/samples/{type(model.prior).__name__}_pca.png")
 
     elif args.mode == "plot":
-        plot_prior_vs_posterior(model, mnist_test_loader, device, save_path=f"exercises/samples/{type(model.prior).__name__}_prior_vs_posterior.png")
+        model.load_state_dict(torch.load(args.model, map_location=torch.device(args.device)))
+        plot_prior_vs_posterior_tsne(model, mnist_test_loader, device, save_path=f"exercises/samples/{type(model.prior).__name__}_prior_vs_posterior.png")
 
     elif args.mode == "fid":
         model.load_state_dict(torch.load(args.model, map_location=torch.device(args.device)))
