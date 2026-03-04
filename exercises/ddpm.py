@@ -278,7 +278,7 @@ if __name__ == "__main__":
             nn.ReLU(),
             nn.Linear(512, 512),
             nn.ReLU(),
-            nn.Linear(512, 784 * 2),  # outputs mu and log_var concatenated flat
+            nn.Linear(512, 784),
         )
 
         decoder = GaussianDecoder(decoder_net)
@@ -357,9 +357,24 @@ if __name__ == "__main__":
 
         if args.data == 'latent':
             with torch.no_grad():
-                z = model.sample((4, D)).to(args.device)
-                x = vae.decoder(z).sample().view(-1, 1, 28, 28).cpu()
-            save_image(x.clamp(0.0, 1.0), args.samples, nrow=4)
+                z_gen = model.sample((10000, D)).to(args.device)
+                x_gen = vae.decoder(z_gen).mean.view(-1, 1, 28, 28).clamp(0.0, 1.0)
+
+            real_loader = torch.utils.data.DataLoader(test_data, batch_size=args.batch_size, shuffle=False)
+            real_batches = []
+            for real_batch in real_loader:
+                img = real_batch[0] if isinstance(real_batch, (list, tuple)) else real_batch
+                real_batches.append(img.unsqueeze(1))
+            x_real = torch.cat(real_batches, dim=0).to(args.device)
+
+            fid = compute_fid(
+                x_real,
+                x_gen,
+                device=args.device,
+                classifier_ckpt="exercises/models/mnist_classifier.pth",
+            )
+            print(f"FID (DDPM latent): {fid}")
+            # save_image(x_gen[:4].cpu(), args.samples, nrow=4)
 
         elif args.data == 'mnist':
             with torch.no_grad():
@@ -378,7 +393,7 @@ if __name__ == "__main__":
                 x_real,
                 samples,
                 device=args.device,
-                classifier_ckpt="models/mnist_classifier.pth",
+                classifier_ckpt="exercises/models/mnist_classifier.pth",
             )
             print(f"FID (DDPM, MNIST): {fid}")
             save_image(samples[:4], args.samples, nrow=4)
