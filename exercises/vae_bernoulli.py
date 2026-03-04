@@ -344,11 +344,21 @@ if __name__ == "__main__":
 
     # Load MNIST dataset
     thresshold = 0.5
+    if args.decoder == 'bernoulli':
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Lambda(lambda x: (x < thresshold).float().squeeze())
+        ])
+    else:
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Lambda(lambda x: x.squeeze())
+        ])
     mnist_train_loader = torch.utils.data.DataLoader(datasets.MNIST('data/', train=True, download=True,
-                                                                    transform=transforms.Compose([transforms.ToTensor(), transforms.Lambda(lambda x: x.squeeze())])),
+                                                                    transform=transform),
                                                     batch_size=args.batch_size, shuffle=True)
     mnist_test_loader = torch.utils.data.DataLoader(datasets.MNIST('data/', train=False, download=True,
-                                                                transform=transforms.Compose([transforms.ToTensor(), transforms.Lambda(lambda x: x.squeeze())])),
+                                                                transform=transform),
                                                     batch_size=args.batch_size, shuffle=True)
 
     # Define prior distribution
