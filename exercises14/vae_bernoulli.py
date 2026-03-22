@@ -19,6 +19,74 @@ from tqdm import tqdm
 from fid import compute_fid
 import matplotlib.lines as mlines
 
+def plot_prior_vs_posterior_tsne(model, test_loader, device, save_path):
+    import matplotlib.pyplot as plt
+    import matplotlib.lines as mlines
+    import seaborn as sns
+    from sklearn.manifold import TSNE
+    import torch
+    import numpy as np
+    from tqdm import tqdm
+
+    latents = []
+    labels_list = []
+    model.eval()
+    
+    # 1. Collect Aggregated Posterior Samples
+    with torch.no_grad():
+        for i, (x, y) in tqdm(enumerate(test_loader), desc="Encoding Posterior"):
+            x = x.to(device)
+            # Assuming model.encoder returns a distribution object
+            q = model.encoder(x)
+            z_post = q.sample().cpu()
+            latents.append(z_post)
+            labels_list.append(y.cpu())
+    
+    posterior_z = torch.cat(latents, dim=0).numpy()
+    labels = torch.cat(labels_list, dim=0).numpy()
+
+    # 2. Collect Prior Samples
+    with torch.no_grad():
+        # Handle different prior implementations (Flow vs others)
+        if isinstance(model.prior, Flow):
+            prior_z = model.prior.sample(sample_shape=(posterior_z.shape[0],))
+        else:
+            prior_z = model.prior().sample(torch.Size([posterior_z.shape[0]]))
+            
+    prior_z = prior_z.cpu().numpy()
+
+    # 3. Apply t-SNE
+    # Concatenate both sets because t-SNE doesn't support .transform() on new data
+    combined_z = np.concatenate([posterior_z, prior_z], axis=0)
+    
+    print(f"Running t-SNE on {combined_z.shape[0]} samples...")
+    tsne = TSNE(n_components=2, random_state=42, n_jobs=-1)
+    combined_2d = tsne.fit_transform(combined_z)
+    
+    # Split back into posterior and prior
+    posterior_2d = combined_2d[:len(posterior_z)]
+    prior_2d = combined_2d[len(posterior_z):]
+
+    # 4. Plotting
+    plt.figure(figsize=(5, 5))
+    
+    # Plot prior as KDE (or scatter if preferred)
+    sns.kdeplot(x=prior_2d[:, 0], y=prior_2d[:, 1], alpha=0.4, color='royalblue', label='Prior', legend=True)
+    #plt.scatter(prior_2d[:, 0], prior_2d[:, 1], color='royalblue', alpha=0.6, s=8, label="Prior", marker='o', edgecolor='none')
+
+    # Plot posterior as scatter
+    sc = plt.scatter(posterior_2d[:, 0], posterior_2d[:, 1], c=labels, cmap="tab10",
+                alpha=1, s=2, marker='.', label="Posterior", zorder=5)
+
+    # Create custom legend handles
+    prior_proxy = mlines.Line2D([], [], color='royalblue', lw=2, label='Prior')
+    
+    plt.grid(alpha=0.2)
+    plt.legend(handles=[sc, prior_proxy])
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close()
+
 def plot_prior_vs_posterior(model, test_loader, device, save_path):
     import matplotlib.pyplot as plt
     from sklearn.decomposition import PCA
@@ -28,7 +96,7 @@ def plot_prior_vs_posterior(model, test_loader, device, save_path):
     latents = []
     labels = []
     model.eval()
-    plt.figure(figsize=(4, 3))
+    plt.figure(figsize=(5, 5))
     # 1. Collect Aggregated Posterior Samples
     with torch.no_grad():
         for x, y in tqdm(test_loader, desc="Encoding Posterior"):
@@ -56,7 +124,7 @@ def plot_prior_vs_posterior(model, test_loader, device, save_path):
     prior_z = prior_z.cpu().numpy()
     prior_2d = pca.transform(prior_z)
     # Plot prior representations
-    plt.scatter(posterior_2d[:, 0], posterior_2d[:, 1], color='red', alpha=0.6, s=8, marker='x', label="Posterior")
+    plt.scatter(posterior_2d[:, 0], posterior_2d[:, 1], c=labels, alpha=0.6, s=8, marker='x', label="Posterior")
     posterior_proxy = mlines.Line2D([], [], color='red', label='Posterior')
     prior_proxy = mlines.Line2D([], [], color='royalblue', label='Prior')
     sns.kdeplot(x=prior_2d[:, 0], y=prior_2d[:, 1], alpha=1.0, color='royalblue', label='Prior', legend=True)
@@ -109,8 +177,8 @@ class MixtureGaussianPrior(nn.Module):
         self.M = M
         self.K = K
         self.logits = nn.Parameter(torch.zeros(self.K))
-        self.loc = nn.Parameter(torch.zeros(self.K, self.M))
-        self.scale = nn.Parameter(torch.ones(self.K, self.M))
+        self.loc = nn.Parameter(torch.randn(self.K, self.M) * 0.1)
+        self.scale = nn.Parameter(torch.ones(self.K, self.M) * 0.1)
 
     def forward(self):
         """
@@ -156,16 +224,16 @@ class GaussianDecoder(nn.Module):
         self.decoder_net = decoder_net
 
     def forward(self, z):
-        # 1. Get the flat output from the network (size: batch_size, 1568)
+        # 1. Get output from the network (size: batch_size, 784*2)
         output = self.decoder_net(z)
-        
-        # 2. Split into mean and log_var (each size: batch_size, 784)
-        mu_flat, log_var_flat = torch.chunk(output, 2, dim=-1)
-        
+
+        # 2. Split into per-pixel mean and log-variance
+        mu, log_var = torch.chunk(output, 2, dim=-1)
+
         # 3. Reshape to image dimensions (size: batch_size, 28, 28)
-        mu = mu_flat.view(-1, 28, 28)
-        std = torch.exp(0.5 * log_var_flat).view(-1, 28, 28)
-        
+        mu = mu.view(-1, 28, 28)
+        std = torch.exp(0.5 * log_var.view(-1, 28, 28).clamp(-4, 4))
+
         # 4. Return the distribution
         # Independent(..., 2) tells PyTorch that the last 2 dims (28x28) are the "event"
         return td.Independent(td.Normal(loc=mu, scale=std), 2)
@@ -343,11 +411,21 @@ if __name__ == "__main__":
 
     # Load MNIST dataset
     thresshold = 0.5
+    if args.decoder == 'bernoulli':
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Lambda(lambda x: (thresshold < x).float().squeeze())
+        ])
+    else:
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Lambda(lambda x: x.squeeze())
+        ])
     mnist_train_loader = torch.utils.data.DataLoader(datasets.MNIST('data/', train=True, download=True,
-                                                                    transform=transforms.Compose([transforms.ToTensor(), transforms.Lambda(lambda x: x.squeeze())])),
+                                                                    transform=transform),
                                                     batch_size=args.batch_size, shuffle=True)
     mnist_test_loader = torch.utils.data.DataLoader(datasets.MNIST('data/', train=False, download=True,
-                                                                transform=transforms.Compose([transforms.ToTensor(), transforms.Lambda(lambda x: x.squeeze())])),
+                                                                transform=transform),
                                                     batch_size=args.batch_size, shuffle=True)
 
     # Define prior distribution
@@ -376,16 +454,7 @@ if __name__ == "__main__":
         nn.ReLU(),
         nn.Linear(512, M*2),
     )
-
-    if args.decoder == 'gaussian':
-        decoder_net = nn.Sequential(
-            nn.Linear(M, 512),
-            nn.ReLU(),
-            nn.Linear(512, 512),
-            nn.ReLU(),
-            nn.Linear(512, 784 * 2)
-        )
-    else:
+    if args.decoder == 'bernoulli':
         decoder_net = nn.Sequential(
             nn.Linear(M, 512),
             nn.ReLU(),
@@ -393,6 +462,14 @@ if __name__ == "__main__":
             nn.ReLU(),
             nn.Linear(512, 784),
             nn.Unflatten(-1, (28, 28))
+        )
+    else:
+        decoder_net = nn.Sequential(
+            nn.Linear(M, 512),
+            nn.ReLU(),
+            nn.Linear(512, 512),
+            nn.ReLU(),
+            nn.Linear(512, 784 * 2),
         )
 
     # Define VAE model
@@ -566,7 +643,8 @@ if __name__ == "__main__":
         plt.savefig(f"exercises/samples/{type(model.prior).__name__}_pca.png")
 
     elif args.mode == "plot":
-        plot_prior_vs_posterior(model, mnist_test_loader, device, save_path=f"exercises/samples/{type(model.prior).__name__}_prior_vs_posterior.png")
+        model.load_state_dict(torch.load(args.model, map_location=torch.device(args.device)))
+        plot_prior_vs_posterior_tsne(model, mnist_test_loader, device, save_path=f"exercises/samples/{type(model.prior).__name__}_prior_vs_posterior.png")
 
     elif args.mode == "fid":
         model.load_state_dict(torch.load(args.model, map_location=torch.device(args.device)))
@@ -588,5 +666,7 @@ if __name__ == "__main__":
         x_gen = x_gen.view(-1, 1, 28, 28).to(device)
         x_real = x_real.view(-1, 1, 28, 28).to(device)
 
+        fid = compute_fid(x_real, x_gen, device=device)
+        print(f"FID Score: {fid:.4f}")
         fid = compute_fid(x_real, x_gen, device=device)
         print(f"FID Score: {fid:.4f}")
