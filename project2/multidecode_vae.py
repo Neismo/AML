@@ -263,7 +263,7 @@ def curve_energy_ensemble(decoder: GaussianDecoders, curves, exact=False):
     batch_size, num_points, latent_dim = curves.shape
     flat_curves = curves.reshape(batch_size * num_points, latent_dim)
 
-    # Get means from ALL decoders. Shape: (M, batch_size * num_points, ...)
+    # Shape: (M, batch_size * num_points, ...)
     all_decoded = decoder.all_means(flat_curves)
     M_decoders = all_decoded.shape[0]
     
@@ -272,13 +272,11 @@ def curve_energy_ensemble(decoder: GaussianDecoders, curves, exact=False):
     dt = 1.0 / max(num_points - 1, 1)
 
     if exact:
-        # Calculate the exact expected energy for final distance calculation
-        total_energy = 0
-        for i in range(M_decoders):
-            for j in range(M_decoders):
-                diffs = all_decoded[i, :, :-1] - all_decoded[j, :, 1:]
-                total_energy += diffs.pow(2).sum(dim=(1, 2)) / dt
-        return total_energy / (M_decoders ** 2)
+        decode_i = all_decoded[:, :, :-1].unsqueeze(1)
+        decode_j = all_decoded[:, :, 1:].unsqueeze(0)
+        diffs = decode_i - decode_j
+        energies_per_pair = diffs.pow(2).sum(dim=(3, 4)) / dt
+        return energies_per_pair.mean(dim=(0, 1))
     else:
         # Monte Carlo approximation for the optimization loop
         i = torch.randint(M_decoders, (1,)).item()
@@ -745,7 +743,7 @@ if __name__ == "__main__":
             euc_stack = torch.stack(euc_dists_for_D)
             geo_stack = torch.stack(geo_dists_for_D)
             
-            # CoV = standard deviation / mean (across the model dimension 0)[cite: 52].
+            # CoV = standard deviation / mean (across the model dimension 0).
             euc_cov = euc_stack.std(dim=0) / euc_stack.mean(dim=0)
             geo_cov = geo_stack.std(dim=0) / geo_stack.mean(dim=0)
             
