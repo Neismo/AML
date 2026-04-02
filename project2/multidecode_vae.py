@@ -194,7 +194,7 @@ def train(model: VAE, optimizer, data_loader, epochs, device):
     with tqdm(range(num_steps)) as pbar:
         for step in pbar:
             # Rotate active decoder every step
-            active_idx = epoch % len(model.decoders.decoder_nets)
+            active_idx = step % len(model.decoders.decoder_nets)
             model.decoders.active_decoder(active_idx)
             try:
                 x = next(iter(data_loader))[0]
