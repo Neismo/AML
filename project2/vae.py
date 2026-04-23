@@ -11,7 +11,9 @@ import torch.nn as nn
 import torch.distributions as td
 import torch.utils.data
 from tqdm import tqdm
+from copy import deepcopy
 import os
+import math
 import matplotlib.pyplot as plt
 
 class GaussianPrior(nn.Module):
@@ -64,46 +66,31 @@ class GaussianEncoder(nn.Module):
         return td.Independent(td.Normal(loc=mean, scale=torch.exp(std)), 1)
 
 
-class GaussianDecoders(nn.Module):
-    def __init__(self, decoder_nets):
+class GaussianDecoder(nn.Module):
+    def __init__(self, decoder_net):
         """
-        Define a list of Bernoulli decoder distributions based on given decoder networks.
+        Define a Bernoulli decoder distribution based on a given decoder network.
 
         Parameters:
-        encoder_nets: [list[torch.nn.Module]]
-           The decoder networks that take as a tensor of dim `(batch_size, M) as
+        encoder_net: [torch.nn.Module]
+           The decoder network that takes as a tensor of dim `(batch_size, M) as
            input, where M is the dimension of the latent space, and outputs a
            tensor of dimension (batch_size, feature_dim1, feature_dim2).
         """
-        super(GaussianDecoders, self).__init__()
-        self.decoder_nets = nn.ModuleList(decoder_nets)
-        self.active_idx: int = 0
+        super(GaussianDecoder, self).__init__()
+        self.decoder_net = decoder_net
         # self.std = nn.Parameter(torch.ones(28, 28) * 0.5, requires_grad=True) # In case you want to learn the std of the gaussian.
-
-    def active_decoder(self, idx):
-        """Set the active decoder. Relevant during training."""
-        self.active_idx=idx
 
     def forward(self, z):
         """
-        Given a batch of latent variables, return a Bernoulli distribution over the data space
-        from the active decoder network.
+        Given a batch of latent variables, return a Bernoulli distribution over the data space.
 
         Parameters:
         z: [torch.Tensor]
            A tensor of dimension `(batch_size, M)`, where M is the dimension of the latent space.
         """
-        means = self.decoder_nets[self.active_idx](z)
+        means = self.decoder_net(z)
         return td.Independent(td.Normal(loc=means, scale=1e-1), 3)
-
-    def all_means(self, z):
-        """Return the means of all decoders for a batch of latent variables.
-        
-        Parameters:
-        z: [torch.Tensor]
-           A tensor of dimension `(batch_size, M)`, where M is the dimension of the latent space.
-        """
-        return torch.stack([net(z) for net in self.decoder_nets])
 
 
 class VAE(nn.Module):
@@ -111,20 +98,20 @@ class VAE(nn.Module):
     Define a Variational Autoencoder (VAE) model.
     """
 
-    def __init__(self, prior: GaussianPrior, decoders: GaussianDecoders, encoder: GaussianEncoder):
+    def __init__(self, prior, decoder, encoder):
         """
         Parameters:
         prior: [torch.nn.Module]
            The prior distribution over the latent space.
-        decoders: [GaussianDecoders]
-              The decoder distributions over the data space.
-        encoder: [GaussianEncoder]
+        decoder: [torch.nn.Module]
+              The decoder distribution over the data space.
+        encoder: [torch.nn.Module]
                 The encoder distribution over the latent space.
         """
 
         super(VAE, self).__init__()
         self.prior = prior
-        self.decoders = decoders
+        self.decoder = decoder
         self.encoder = encoder
 
     def elbo(self, x):
@@ -141,7 +128,7 @@ class VAE(nn.Module):
         z = q.rsample()
 
         elbo = torch.mean(
-            self.decoders(z).log_prob(x) - q.log_prob(z) + self.prior().log_prob(z)
+            self.decoder(z).log_prob(x) - q.log_prob(z) + self.prior().log_prob(z)
         )
         return elbo
 
@@ -154,7 +141,7 @@ class VAE(nn.Module):
            Number of samples to generate.
         """
         z = self.prior().sample(torch.Size([n_samples]))
-        return self.decoders(z).sample()
+        return self.decoder(z).sample()
 
     def forward(self, x):
         """
@@ -167,7 +154,7 @@ class VAE(nn.Module):
         return -self.elbo(x)
 
 
-def train(model: VAE, optimizer, data_loader, epochs, device):
+def train(model, optimizer, data_loader, epochs, device):
     """
     Train a VAE model.
 
@@ -183,8 +170,8 @@ def train(model: VAE, optimizer, data_loader, epochs, device):
     device: [torch.device]
         The device to use for training.
     """
-    num_decoders = len(model.decoders.decoder_nets)
-    num_steps = len(data_loader) * num_decoders * epochs
+
+    num_steps = len(data_loader) * epochs
     epoch = 0
 
     def noise(x, std=0.05):
@@ -193,9 +180,6 @@ def train(model: VAE, optimizer, data_loader, epochs, device):
 
     with tqdm(range(num_steps)) as pbar:
         for step in pbar:
-            # Rotate active decoder every step
-            active_idx = step % len(model.decoders.decoder_nets)
-            model.decoders.active_decoder(active_idx)
             try:
                 x = next(iter(data_loader))[0]
                 x = noise(x.to(device))
@@ -210,14 +194,14 @@ def train(model: VAE, optimizer, data_loader, epochs, device):
                 if step % 5 == 0:
                     loss = loss.detach().cpu()
                     pbar.set_description(
-                        f"total epochs ={epoch+1}, decoder={active_idx+1} step={step}, loss={loss:.1f}"
-                    )   
+                        f"total epochs ={epoch}, step={step}, loss={loss:.1f}"
+                    )
 
                 if (step + 1) % len(data_loader) == 0:
                     epoch += 1
             except KeyboardInterrupt:
                 print(
-                    f"Stopping training at total epoch {epoch+1} and current loss: {loss:.1f}"
+                    f"Stopping training at total epoch {epoch} and current loss: {loss:.1f}"
                 )
                 break
 
@@ -257,71 +241,6 @@ def curve_energy(decoder, curves):
     diffs = decoded[:, 1:] - decoded[:, :-1]
     dt = 1.0 / max(num_points - 1, 1)
     return diffs.flatten(start_dim=2).pow(2).sum(dim=(1, 2)) / dt
-
-
-def curve_energy_ensemble(decoder: GaussianDecoders, curves, exact=False):
-    batch_size, num_points, latent_dim = curves.shape
-    flat_curves = curves.reshape(batch_size * num_points, latent_dim)
-
-    # Shape: (M, batch_size * num_points, ...)
-    all_decoded = decoder.all_means(flat_curves)
-    M_decoders = all_decoded.shape[0]
-    
-    # Reshape to easily index time steps
-    all_decoded = all_decoded.reshape(M_decoders, batch_size, num_points, -1)
-    dt = 1.0 / max(num_points - 1, 1)
-
-    if exact:
-        decode_i = all_decoded[:, :, :-1].unsqueeze(1)
-        decode_j = all_decoded[:, :, 1:].unsqueeze(0)
-        diffs = decode_i - decode_j
-        energies_per_pair = diffs.pow(2).sum(dim=(3, 4)) / dt
-        return energies_per_pair.mean(dim=(0, 1))
-    else:
-        # Monte Carlo approximation for the optimization loop
-        i = torch.randint(M_decoders, (1,)).item()
-        j = torch.randint(M_decoders, (1,)).item()
-        
-        diffs = all_decoded[i, :, :-1] - all_decoded[j, :, 1:]
-        return diffs.pow(2).sum(dim=(1, 2)) / dt
-
-
-def compute_geodesics_ensemble(decoder, starts, ends, num_points, num_steps, lr):
-    """
-    Optimize interior points of piecewise-linear curves to minimize the expected 
-    pull-back energy across an ensemble of decoders.
-    """
-    curves = linear_paths(starts, ends, num_points)
-    
-    if num_points <= 2:
-        # If the curve only has a start and end point, return the exact expected energy
-        return curves, curve_energy_ensemble(decoder, curves, exact=True)
-
-    interior = nn.Parameter(curves[:, 1:-1].clone())
-    optimizer = torch.optim.Adam([interior], lr=lr)
-
-    with torch.no_grad():
-        best_curves = curves.clone()
-        # Evaluate the baseline using the EXACT expected energy
-        best_energies = curve_energy_ensemble(decoder, best_curves, exact=True)
-
-    for _ in range(num_steps):
-        optimizer.zero_grad()
-        # Reconstruct the full curve (start + interior + end)
-        curves = torch.cat([starts[:, None, :], interior, ends[:, None, :]], dim=1)
-        
-        mc_energies = curve_energy_ensemble(decoder, curves, exact=False)
-        loss = mc_energies.mean()
-        loss.backward()
-        optimizer.step()
-
-        with torch.no_grad():
-            exact_energies = curve_energy_ensemble(decoder, curves, exact=True)
-            improved = exact_energies < best_energies
-            best_energies[improved] = exact_energies[improved]
-            best_curves[improved] = curves.detach()[improved]
-
-    return best_curves, best_energies
 
 
 def compute_geodesics(decoder, starts, ends, num_points, num_steps, lr):
@@ -622,34 +541,31 @@ if __name__ == "__main__":
 
     # Choose mode to run
     if args.mode == "train":
-        for rerun in range(args.num_reruns):
-            experiments_folder = args.experiment_folder
-            model_file = os.path.join(args.experiment_folder, f"multidecode_rerun_{rerun+1}_D_{args.num_decoders}.pt")
 
-            os.makedirs(f"{experiments_folder}", exist_ok=True)
-            os.makedirs(os.path.dirname(model_file) or ".", exist_ok=True)
-            
-            model = VAE(
-                GaussianPrior(M),
-                GaussianDecoders([new_decoder() for _ in range(args.num_decoders)]),
-                GaussianEncoder(new_encoder()),
-            ).to(device)
-            
-            optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-            train(
-                model,
-                optimizer,
-                mnist_train_loader,
-                args.epochs_per_decoder,
-                args.device,
-            )
-            os.makedirs(f"{experiments_folder}", exist_ok=True)
-            torch.save(model.state_dict(), model_file)
+        experiments_folder = args.experiment_folder
+        os.makedirs(f"{experiments_folder}", exist_ok=True)
+        os.makedirs(os.path.dirname(model_file) or ".", exist_ok=True)
+        model = VAE(
+            GaussianPrior(M),
+            GaussianDecoder(new_decoder()),
+            GaussianEncoder(new_encoder()),
+        ).to(device)
+        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+        train(
+            model,
+            optimizer,
+            mnist_train_loader,
+            args.epochs_per_decoder,
+            args.device,
+        )
+        os.makedirs(f"{experiments_folder}", exist_ok=True)
+
+        torch.save(model.state_dict(), model_file)
 
     elif args.mode == "sample":
         model = VAE(
             GaussianPrior(M),
-            GaussianDecoders([new_decoder() for _ in range(args.num_decoders)]),
+            GaussianDecoder(new_decoder()),
             GaussianEncoder(new_encoder()),
         ).to(device)
         model.load_state_dict(torch.load(model_file))
@@ -667,112 +583,52 @@ if __name__ == "__main__":
 
     elif args.mode == "eval":
         # Load trained model
-        for rerun in range(args.num_reruns):
-            model_file = os.path.join(args.experiment_folder, f"multidecode_rerun_{rerun+1}_D_{args.num_decoders}.pt")
-            model = VAE(
-                GaussianPrior(M),
-                GaussianDecoders([new_decoder() for _ in range(args.num_decoders)]),
-                GaussianEncoder(new_encoder()),
-            ).to(device)
-            model.load_state_dict(torch.load(model_file))
-            model.eval()
+        model = VAE(
+            GaussianPrior(M),
+            GaussianDecoder(new_decoder()),
+            GaussianEncoder(new_encoder()),
+        ).to(device)
+        model.load_state_dict(torch.load(model_file))
+        model.eval()
 
-            elbos = []
-            with torch.no_grad():
-                for x, y in mnist_test_loader:
-                    x = x.to(device)
-                    elbo = model.elbo(x)
-                    elbos.append(elbo)
-            mean_elbo = torch.tensor(elbos).mean()
-            print(f"Mean test ELBO [rerun {rerun+1}]:", mean_elbo)
+        elbos = []
+        with torch.no_grad():
+            for x, y in mnist_test_loader:
+                x = x.to(device)
+                elbo = model.elbo(x)
+                elbos.append(elbo)
+        mean_elbo = torch.tensor(elbos).mean()
+        print("Print mean test elbo:", mean_elbo)
 
     elif args.mode == "geodesics":
 
-        # Ensure same testing points across the models
-        images, labels = next(iter(mnist_test_loader))
-        images = images.to(device)
+        model = VAE(
+            GaussianPrior(M),
+            GaussianDecoder(new_decoder()),
+            GaussianEncoder(new_encoder()),
+        ).to(device)
+        model.load_state_dict(torch.load(model_file))
+        model.eval()
 
-        num_pairs = 10
+        latents, labels = collect_latents(model, mnist_test_loader, device)
+        pair_idx = sample_latent_pairs(latents, args.num_curves, args.seed)
+        starts = latents[pair_idx[:, 0]].to(device)
+        ends = latents[pair_idx[:, 1]].to(device)
 
-        if images.shape[0] < num_pairs * 2:
-            raise ValueError(f"Expected a batch size equal to {num_pairs*2} at least")
+        curves, energies = compute_geodesics(
+            model.decoder,
+            starts,
+            ends,
+            num_points=args.num_t,
+            num_steps=args.geodesic_iters,
+            lr=args.geodesic_lr,
+        )
 
-        starts_img = images[:num_pairs]
-        ends_img = images[num_pairs:2*num_pairs]
-
-        cov_results = {'euclidean': [], 'geodesic': []}
-
-        for num_dec in [1,2,3]:
-
-            euc_dists_for_D = []
-            geo_dists_for_D = []
-
-            for rerun in range(args.num_reruns):
-                model_file = os.path.join(args.experiment_folder, f"multidecode_rerun_{rerun+1}_D_{num_dec}.pt")
-                model = VAE(
-                    GaussianPrior(M),
-                    GaussianDecoders([new_decoder() for _ in range(num_dec)]),
-                    GaussianEncoder(new_encoder()),
-                ).to(device)
-                model.load_state_dict(torch.load(model_file))
-                model.eval()
-
-                with torch.no_grad():
-                    starts_z = model.encoder(starts_img).mean
-                    ends_z = model.encoder(ends_img).mean
-                
-                # A. Euclidean Distance
-                euc_dist = torch.norm(starts_z - ends_z, dim=-1)
-                euc_dists_for_D.append(euc_dist)
-                
-                # B. Geodesic Distance
-                curves, energies = compute_geodesics_ensemble(
-                    model.decoders, 
-                    starts_z,
-                    ends_z,
-                    num_points=args.num_t, 
-                    num_steps=args.geodesic_iters, 
-                    lr=args.geodesic_lr
-                )
-                
-                # Because the curves are optimized to have constant speed, length = sqrt(Energy). We use this as our distance measure.
-                geo_dist = torch.sqrt(energies.detach())
-                geo_dists_for_D.append(geo_dist)
-
-            # Stack lists to shape: (num_reruns, num_pairs)
-            euc_stack = torch.stack(euc_dists_for_D)
-            geo_stack = torch.stack(geo_dists_for_D)
-            
-            # CoV = standard deviation / mean (across the model dimension 0).
-            euc_cov = euc_stack.std(dim=0) / euc_stack.mean(dim=0)
-            geo_cov = geo_stack.std(dim=0) / geo_stack.mean(dim=0)
-            
-            # Store the average CoV across the 10 point pairs[cite: 59].
-            avg_euc_cov = euc_cov.mean().item()
-            avg_geo_cov = geo_cov.mean().item()
-            
-            cov_results['euclidean'].append(avg_euc_cov)
-            cov_results['geodesic'].append(avg_geo_cov)
-        
-        print("Average CoV for Euclidean Distances across reruns:", cov_results['euclidean'])
-        print("Average CoV for Geodesic Distances across reruns:", cov_results['geodesic'])
-
-        # 4. PLOT THE RESULTS
-        plt.figure(figsize=(8, 6))
-        M_values = [1, 2, 3]
-        
-        plt.plot(M_values, cov_results['euclidean'], marker='o', label='Euclidean Distance', linestyle='--', color='red')
-        plt.plot(M_values, cov_results['geodesic'], marker='s', label='Geodesic Distance', linewidth=2, color='blue')
-        
-        plt.xlabel('Number of Ensemble Decoders (M)', fontsize=14)
-        plt.ylabel('Average Coefficient of Variation (CoV)', fontsize=14)
-        plt.title('Reliability of Distances vs. Ensemble Size', fontsize=16)
-        plt.xticks(M_values)
-        plt.legend(fontsize=12)
-        plt.grid(True, alpha=0.3)
-        
         os.makedirs(args.experiment_folder, exist_ok=True)
-        plot_path = os.path.join(args.experiment_folder, "cov_plot.png")
-        plt.savefig(plot_path, dpi=200)
-        plt.close()
-        print(f"Saved final CoV plot to {plot_path}")
+        os.makedirs(os.path.dirname(geodesics_file) or ".", exist_ok=True)
+        plot_latent_geodesics(latents, labels, pair_idx, curves, geodesics_file)
+
+        euclidean = torch.norm(ends - starts, dim=-1).cpu()
+        print(f"saved latent geodesics plot to: {geodesics_file}")
+        print(f"mean Euclidean distance: {euclidean.mean():.4f}")
+        print(f"mean pull-back energy: {energies.detach().cpu().mean():.4f}")
