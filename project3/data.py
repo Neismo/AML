@@ -90,6 +90,6 @@ class GraphDataset:
     def __getitem__(self, key):
         if key > len(self.dataset) or key < 0:
             raise IndexError(f"Index {key} is out of bounds for dataset of size {len(self.dataset)}")
-        return self.get_original_graph_as_networkx(key)
+        return self.get_original_graph_as_networkx(key), self.dataset[key]
 
 GC = GraphDataset()
